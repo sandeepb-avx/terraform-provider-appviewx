@@ -20,7 +20,9 @@ type SearchCertificatePayload struct {
 }
 
 type Input struct {
-	ResourceId string `json:"resourceId"`
+	ResourceId   string `json:"resourceId,omitempty"`
+	CommonName   string `json:"commonName,omitempty"`
+	SerialNumber string `json:"serialNumber,omitempty"`
 }
 
 type Filter struct {

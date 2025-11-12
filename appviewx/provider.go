@@ -13,18 +13,18 @@ func Provider() *schema.Provider {
 	return &schema.Provider{
 		Schema: map[string]*schema.Schema{
 			constants.APPVIEWX_USERNAME: {
-				Type:      schema.TypeString,
-				Optional:  true,
+				Type:        schema.TypeString,
+				Optional:    true,
 				DefaultFunc: schema.EnvDefaultFunc("APPVIEWX_TERRAFORM_USERNAME", nil),
 				Description: "AppViewX Username",
-				Sensitive: true,
+				Sensitive:   true,
 			},
 			constants.APPVIEWX_PASSWORD: {
-				Type:      schema.TypeString,
-				Optional:  true,
+				Type:        schema.TypeString,
+				Optional:    true,
 				DefaultFunc: schema.EnvDefaultFunc("APPVIEWX_TERRAFORM_PASSWORD", nil),
 				Description: "AppViewX Password",
-				Sensitive: true,
+				Sensitive:   true,
 			},
 			constants.APPVIEWX_CLIENT_ID: {
 				Type:        schema.TypeString,
@@ -102,7 +102,7 @@ func providerConfigure(d *schema.ResourceData) (interface{}, error) {
 	}
 
 	logLevel := d.Get("log_level").(string)
-    logger.SetLevel(logLevel)
-    logger.Info("AppViewX Provider initialized with log level: %s", logLevel)
+	logger.SetLevel(logLevel)
+	logger.Info("AppViewX Provider initialized with log level: %s", logLevel)
 	return &appviewxEnvironment, nil
 }

@@ -207,11 +207,11 @@ func GetDownloadFilePathForKey(resourceData *schema.ResourceData, commonName, do
 	}
 }
 
-func GetDownloadPassword(resourceData *schema.ResourceData, downloadFormat string) (string, bool) {
-	password := resourceData.Get(constants.CERTIFICATE_DOWNLOAD_PASSWORD)
-	if password != nil && password != "" && (downloadFormat == "PFX" || downloadFormat == "JKS" || downloadFormat == "P12") {
-		return password.(string), true
-	} else if (password == nil || password == "") && (downloadFormat == "PFX" || downloadFormat == "JKS" || downloadFormat == "P12") {
+func GetDownloadPassword(resourceData *schema.ResourceData, downloadFormat string, configAppviewxEnvironment *config.AppViewXEnvironment) (string, bool) {
+	password := getPasswordWithPriority(configAppviewxEnvironment.ProviderCertDownloadPassword, resourceData.Get(constants.CERTIFICATE_DOWNLOAD_PASSWORD).(string))
+	if password != "" && (downloadFormat == "PFX" || downloadFormat == "JKS" || downloadFormat == "P12") {
+		return password, true
+	} else if password == "" && (downloadFormat == "PFX" || downloadFormat == "JKS" || downloadFormat == "P12") {
 		log.Println("[ERROR] Password not found for the specified download format - " + downloadFormat)
 		return "", false
 	}
@@ -286,7 +286,9 @@ func downloadCertificateFromAppviewx(appviewxResourceId, commonName, serialNumbe
 func downloadKey(resourceData *schema.ResourceData, resourceID, appviewxSessionID, accessToken string, configAppViewXEnvironment *config.AppViewXEnvironment) error {
 	commonName := resourceData.Get(constants.COMMON_NAME).(string)
 	downloadPath := GetDownloadFilePathForKey(resourceData, commonName+"_key", "PEM")
-	downloadPassword := resourceData.Get(constants.KEY_DOWNLOAD_PASSWORD).(string)
+	providerKeyPassword := configAppViewXEnvironment.ProviderKeyDownloadPassword
+	resourceKeyPassword := resourceData.Get(constants.KEY_DOWNLOAD_PASSWORD).(string)
+	downloadPassword := getPasswordWithPriority(providerKeyPassword, resourceKeyPassword)
 	downloadPasswordProtectedKey := resourceData.Get(constants.DOWNLOAD_PASSWORD_PROTECTED_KEY).(bool)
 
 	if downloadPassword == "" {

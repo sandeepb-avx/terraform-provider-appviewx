@@ -10,9 +10,9 @@ import (
 )
 
 var (
-	version     = "1.0.7"
-	releaseDate = "August 26, 2025"
-	description = "Optimization in Download Certificate Resource"
+	version     = "1.0.8"
+	releaseDate = "Aug 29, 2025"
+	description = "Changes in Download Certificate and Key Resource"
 )
 
 func init() {

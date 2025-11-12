@@ -233,7 +233,7 @@ func downloadCertificate(resourceData *schema.ResourceData, resourceID string, a
 
 	downloadFormat := GetDownloadFormat(resourceData)
 	downloadPath := GetDownloadFilePath(resourceData, commonName, downloadFormat)
-	if downloadPassword, ok = GetDownloadPassword(resourceData, downloadFormat); !ok {
+	if downloadPassword, ok = GetDownloadPassword(resourceData, downloadFormat, configAppViewXEnvironment); !ok {
 		return errors.New("[ERROR] Error in getting the download password")
 	}
 	isChainRequired = resourceData.Get(constants.CERTIFICATE_CHAIN_REQUIRED).(bool)

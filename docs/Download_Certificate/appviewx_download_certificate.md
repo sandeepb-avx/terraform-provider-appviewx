@@ -28,11 +28,11 @@ The appviewx_download_certificate resource supports the following attributes:
 
 - **`certificate_download_path`** (string): The file path to download the certificate.
 - **`certificate_download_format`** (string): The format of the downloaded certificate. Possible values are PEM, CER, CRT, DER, P12, PFX
-- **`certificate_download_password`** (string): The password for the downloaded certificate file.
+- **`certificate_download_password`** (string): The password for the downloaded certificate file. If this password is defined in the provider configuration, it takes precedence over the resource-level password. Additionally, when specified in the provider, the password will not be stored in the Terraform state file for enhanced security.
 - **`certificate_chain_required`** (boolean): Whether to include the certificate chain in the downloaded certificate.
 
 - **`key_download_path`** (string): The file path to download the private key seperately.
-- **`key_download_password`** (string): The password for the downloaded private key. This is required to download the private key from AppViewX and by default the key is password protected from AppViewX.
+- **`key_download_password`** (string): The password for the downloaded private key. This is required to download the private key from AppViewX and by default the key is password protected from AppViewX.  If this password is defined in the provider configuration, it takes precedence over the resource-level password. Additionally, when specified in the provider, the password will not be stored in the Terraform state file for enhanced security.
 - **`download_password_protected_key`** (boolean): To specify whether the private key should be downloaded as password-protected or plain private key. If this is enabled then the password protected key is downloaded as such, but if this is disabled then the password protected key is decrypted using the provided password using openssl and saved in the specified path automatically.
 > **Note**: This Key download is optional and can be ignored if the certificate download format specified is P12 or PFX.
 

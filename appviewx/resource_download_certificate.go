@@ -1,9 +1,14 @@
 package appviewx
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log"
 	"math/rand"
+	"net/http"
 	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -146,7 +151,7 @@ func resourceDownloadCertificate(resourceData *schema.ResourceData, m interface{
 	}
 	if resourceData.Get(constants.KEY_DOWNLOAD_PATH) != "" {
 		log.Println("[INFO] Key download path is provided in the payload hence proceeding with key download")
-		if err := downloadKeyWithPriority(resourceData, resourceId, appviewxSessionID, accessToken, configAppViewXEnvironment); err != nil {
+		if err := downloadKeyWithPriority(resourceData, commonName, serialNumber, resourceId, appviewxSessionID, accessToken, configAppViewXEnvironment); err != nil {
 			return err
 		}
 	}
@@ -156,13 +161,11 @@ func resourceDownloadCertificate(resourceData *schema.ResourceData, m interface{
 // getPasswordWithPriority returns password with provider priority over resource
 func getPasswordWithPriority(providerPassword, resourcePassword string) string {
 	if providerPassword != "" {
-		log.Println("[INFO] -------------------Provider password is considered------------------")
-		log.Println("[INFO] Using provider-level password")
+		log.Println("[INFO] Using password from provider configuration")
 		return providerPassword
 	}
 	if resourcePassword != "" {
-		log.Println("[INFO] -------------------Resource password is considered------------------")
-		log.Println("[INFO] Using resource-level password")
+		log.Println("[INFO] Using password from resource configuration")
 		return resourcePassword
 	}
 	log.Println("[INFO] No password provided at provider or resource level")
@@ -170,8 +173,7 @@ func getPasswordWithPriority(providerPassword, resourcePassword string) string {
 }
 
 // downloadKeyWithPriority downloads key using provider-level password priority
-func downloadKeyWithPriority(resourceData *schema.ResourceData, resourceID, appviewxSessionID, accessToken string, configAppViewXEnvironment *config.AppViewXEnvironment) error {
-	commonName := resourceData.Get(constants.COMMON_NAME).(string)
+func downloadKeyWithPriority(resourceData *schema.ResourceData, commonName, serialNumber, resourceID, appviewxSessionID, accessToken string, configAppViewXEnvironment *config.AppViewXEnvironment) error {
 	downloadPath := GetDownloadFilePathForKey(resourceData, commonName+"_key", "PEM")
 
 	// Get key download password with provider priority
@@ -187,7 +189,7 @@ func downloadKeyWithPriority(resourceData *schema.ResourceData, resourceID, appv
 	}
 
 	// Use the existing downloadKeyFromAppviewx function with the priority-based password
-	searchResponse := searchCertificate(resourceID, appviewxSessionID, accessToken, configAppViewXEnvironment)
+	searchResponse := searchCertificateForDownload(resourceID, commonName, serialNumber, appviewxSessionID, accessToken, configAppViewXEnvironment)
 	if searchResponse.AppviewxResponse.ResponseObject.Objects != nil && searchResponse.AppviewxResponse.ResponseObject.Objects[0].UUID == "" {
 		log.Println("[ERROR] Cannot find the UUID for the resource id " + resourceID + " to proceed with key download")
 		return errors.New("[ERROR] Certificate details was not found to download the private key")
@@ -202,4 +204,75 @@ func downloadKeyWithPriority(resourceData *schema.ResourceData, resourceID, appv
 		return errors.New("[ERROR] Private key was not downloaded in the specified path")
 	}
 	return nil
+}
+
+func searchCertificateForDownload(resourceID, commonName, serialNumber, appviewxSessionID, accessToken string, configAppViewXEnvironment *config.AppViewXEnvironment) config.AppviewxSearchCertResponse {
+	var response config.AppviewxSearchCertResponse
+	httpMethod := config.HTTPMethodPost
+	appviewxEnvironmentIP := configAppViewXEnvironment.AppViewXEnvironmentIP
+	appviewxEnvironmentPort := configAppViewXEnvironment.AppViewXEnvironmentPort
+	appviewxEnvironmentIsHTTPS := configAppViewXEnvironment.AppViewXIsHTTPS
+	headers := frameHeaders()
+	url := GetURL(appviewxEnvironmentIP, appviewxEnvironmentPort, config.SearchCertificateActionId, frameQueryParams(), appviewxEnvironmentIsHTTPS)
+	payload := frameSearchCertificatePayloadForDownload(resourceID, commonName, serialNumber)
+	requestBody, err := json.Marshal(payload)
+	if err != nil {
+		log.Println("[ERROR] error in Marshalling the payload ", payload, err)
+		return response
+	}
+
+	client := &http.Client{Transport: HTTPTransport()}
+
+	printRequest(httpMethod, url, headers, requestBody)
+
+	req, err := http.NewRequest(httpMethod, url, bytes.NewBuffer(requestBody))
+	if err != nil {
+		log.Println("[ERROR] error in creating new Request", err)
+		return response
+	}
+
+	for key, value := range headers {
+		value1 := fmt.Sprintf("%v", value)
+		key1 := fmt.Sprintf("%v", key)
+		req.Header.Add(key1, value1)
+	}
+	if appviewxSessionID != "" {
+		req.Header.Add(constants.SESSION_ID, appviewxSessionID)
+	} else {
+		req.Header.Add(constants.TOKEN, accessToken)
+	}
+	httpResponse, err := client.Do(req)
+	if err != nil {
+		log.Println("[ERROR] error in http request", err)
+		return response
+	}
+	log.Println("[INFO] Response status code : ", httpResponse.Status)
+	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
+		responseBody, err := io.ReadAll(httpResponse.Body)
+		if err == nil {
+			log.Println("[ERROR] Response obtained : ", string(responseBody))
+			return response
+		}
+	}
+	responseByte, err := io.ReadAll(httpResponse.Body)
+	if err != nil {
+		log.Println(err)
+	} else {
+		err = json.Unmarshal(responseByte, &response)
+		if err != nil {
+			log.Println("[ERROR] Error while searching for certificate with resource id "+resourceID+" due to :", err)
+		} else {
+			log.Println("[INFO] Obtained response for certificate search successfully")
+		}
+	}
+	return response
+}
+
+func frameSearchCertificatePayloadForDownload(resourceId, commonName, serialNumber string) config.SearchCertificatePayload {
+	var payload config.SearchCertificatePayload = config.SearchCertificatePayload{}
+	payload.Filter.SortOrder = "asc"
+	payload.Input.ResourceId = resourceId
+	payload.Input.CommonName = commonName
+	payload.Input.SerialNumber = serialNumber
+	return payload
 }
