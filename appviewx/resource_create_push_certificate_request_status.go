@@ -263,6 +263,11 @@ func CreatePushCertificateRequestStatus() *schema.Resource {
 				Computed:    true,
 				Description: "Certificate extended key usage",
 			},
+			"certificate_expiry_status": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate expiry status (e.g., Active, Revoked, Expired)",
+			},
 		},
 		Importer: &schema.ResourceImporter{
 			StateContext: resourceCertificateImport,
@@ -1183,16 +1188,16 @@ func fetchCertificateDetails(resourceId, certType, appviewxSessionID, accessToke
 	}
 
 	// Format and log JSON response for debugging
-	var prettyJSON bytes.Buffer
-	if json.Indent(&prettyJSON, body, "", "  ") == nil {
-		logger.Info(" Certificate search response body (formatted JSON):\n%s", prettyJSON.String())
-	} else {
-		logger.Info(" Certificate search response body (raw):\n%s", string(body))
-	}
+	// var prettyJSON bytes.Buffer
+	// if json.Indent(&prettyJSON, body, "", "  ") == nil {
+	// 	logger.Info(" Certificate search response body (formatted JSON):\n%s", prettyJSON.String())
+	// } else {
+	// 	logger.Info(" Certificate search response body (raw):\n%s", string(body))
+	// }
 
 	// Log the full response for debugging
 	logger.Info(" Certificate search response status: %d", resp.StatusCode)
-	logger.Info(" Certificate search full response:\n%s", string(body))
+	// logger.Info(" Certificate search full response:\n%s", string(body))
 
 	// Parse response to extract certificate details
 	var responseObj map[string]interface{}
@@ -1314,6 +1319,11 @@ func fetchCertificateDetails(resourceId, certType, appviewxSessionID, accessToke
 					if extKeyUsage, ok := cert["extendedKeyUsage"].(string); ok {
 						d.Set("extended_key_usage", extKeyUsage)
 						logger.Info(" Set extended_key_usage: %s", extKeyUsage)
+					}
+
+					if expiryStatus, ok := cert["expiryStatus"].(string); ok {
+						d.Set("certificate_expiry_status", expiryStatus)
+						logger.Info(" Set certificate_expiry_status: %s", expiryStatus)
 					}
 
 					logger.Info(" Successfully populated all certificate details in terraform state")

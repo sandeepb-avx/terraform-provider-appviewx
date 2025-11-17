@@ -79,6 +79,117 @@ func ResourceSearchCertificateByKeyword() *schema.Resource {
 				Computed:    true,
 				Description: "Total number of records found",
 			},
+			// Certificate metadata fields - populated from the first certificate found
+			"certificate_id": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate ID from search results",
+			},
+			"certificate_uuid": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate UUID from search results",
+			},
+			"certificate_common_name": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate common name (CN) from search results",
+			},
+			"certificate_serial_number": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate serial number from search results",
+			},
+			"certificate_issuer": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate issuer from search results",
+			},
+			"certificate_status": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate status from search results",
+			},
+			"certificate_valid_from": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate valid from date",
+			},
+			"certificate_valid_to": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate valid to date (expiration)",
+			},
+			"certificate_valid_for": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate validity period in days",
+			},
+			"certificate_key_algorithm": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate key algorithm",
+			},
+			"certificate_signature_algorithm": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate signature algorithm",
+			},
+			"certificate_thumbprint": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate thumbprint/fingerprint",
+			},
+			"certificate_resource_id": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate resource ID in AppViewX",
+			},
+			"certificate_subject_alternative_names": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate Subject Alternative Names (SANs) as JSON string",
+			},
+			"certificate_version": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate version",
+			},
+			"certificate_organization": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate organization (O)",
+			},
+			"certificate_organizational_unit": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate organizational unit (OU)",
+			},
+			"certificate_country": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate country (C)",
+			},
+			"certificate_province": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate state/province (ST)",
+			},
+			"certificate_locality": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate locality/city (L)",
+			},
+			"certificate_email": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate email address",
+			},
+			"certificate_expiry_status": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate expiry status (e.g., Active, Revoked, Expired)",
+			},
 		},
 	}
 }
@@ -132,6 +243,60 @@ func resourceSearchCertificateByKeywordCreate(ctx context.Context, d *schema.Res
 	// Only store non-sensitive metadata in state
 	d.Set("total_records", result.TotalRecords)
 
+	// Populate certificate metadata from the first certificate found (if any)
+	if len(result.Certificates) > 0 {
+		firstCert := result.Certificates[0]
+		logger.Info("📋 Populating certificate metadata from first search result: %s", firstCert.CommonName)
+
+		// Set all the certificate metadata fields
+		d.Set("certificate_id", firstCert.ID)
+		d.Set("certificate_uuid", firstCert.UUID)
+		d.Set("certificate_common_name", firstCert.CommonName)
+		d.Set("certificate_serial_number", firstCert.SerialNumber)
+		d.Set("certificate_issuer", firstCert.Issuer)
+		d.Set("certificate_status", firstCert.Status)
+		d.Set("certificate_valid_from", firstCert.ValidFrom)
+		d.Set("certificate_valid_to", firstCert.ValidTo)
+		d.Set("certificate_valid_for", firstCert.ValidFor)
+		d.Set("certificate_key_algorithm", firstCert.KeyAlgorithm)
+		d.Set("certificate_signature_algorithm", firstCert.SignatureAlgorithm)
+		d.Set("certificate_thumbprint", firstCert.ThumbPrint)
+		d.Set("certificate_resource_id", firstCert.ResourceID)
+
+		// Set additional metadata if available in the Certificate struct
+		if firstCert.Version != "" {
+			d.Set("certificate_version", firstCert.Version)
+		}
+		if firstCert.Organization != "" {
+			d.Set("certificate_organization", firstCert.Organization)
+		}
+		if firstCert.OrganizationalUnit != "" {
+			d.Set("certificate_organizational_unit", firstCert.OrganizationalUnit)
+		}
+		if firstCert.Country != "" {
+			d.Set("certificate_country", firstCert.Country)
+		}
+		if firstCert.State != "" {
+			d.Set("certificate_province", firstCert.State)
+		}
+		if firstCert.Locality != "" {
+			d.Set("certificate_locality", firstCert.Locality)
+		}
+		if firstCert.Email != "" {
+			d.Set("certificate_email", firstCert.Email)
+		}
+		if firstCert.SubjectAlternativeNames != "" {
+			d.Set("certificate_subject_alternative_names", firstCert.SubjectAlternativeNames)
+		}
+		if firstCert.ExpiryStatus != "" {
+			d.Set("certificate_expiry_status", firstCert.ExpiryStatus)
+		}
+
+		logger.Info("✅ Certificate metadata populated for: %s (Serial: %s)", firstCert.CommonName, firstCert.SerialNumber)
+	} else {
+		logger.Info("ℹ️  No certificates found in search results - metadata fields will remain empty")
+	}
+
 	// DO NOT store certificates or raw response in state
 
 	logger.Info("✅ Search complete with %d total records\n", result.TotalRecords)
@@ -169,19 +334,29 @@ type CertificateSearchResult struct {
 
 // Structure for certificate details
 type Certificate struct {
-	ID                 string
-	UUID               string
-	CommonName         string
-	SerialNumber       string
-	Issuer             string
-	Status             string
-	ValidFrom          string
-	ValidTo            string
-	ValidFor           string
-	KeyAlgorithm       string
-	SignatureAlgorithm string
-	ThumbPrint         string
-	ResourceID         string
+	ID                      string
+	UUID                    string
+	CommonName              string
+	SerialNumber            string
+	Issuer                  string
+	Status                  string
+	ValidFrom               string
+	ValidTo                 string
+	ValidFor                string
+	KeyAlgorithm            string
+	SignatureAlgorithm      string
+	ThumbPrint              string
+	ResourceID              string
+	KeySize                 int
+	Version                 string
+	Organization            string
+	OrganizationalUnit      string
+	Country                 string
+	State                   string
+	Locality                string
+	Email                   string
+	SubjectAlternativeNames string
+	ExpiryStatus            string
 }
 
 func searchCertificatesByKeyword(d *schema.ResourceData, configAppViewXEnvironment *config.AppViewXEnvironment, appviewxSessionID, accessToken string) (CertificateSearchResult, error) {
@@ -307,6 +482,7 @@ func searchCertificatesByKeyword(d *schema.ResourceData, configAppViewXEnvironme
 					if certMap, ok := record.(map[string]interface{}); ok {
 						cert := Certificate{}
 
+						// Basic certificate fields
 						if val, ok := certMap["resourceId"].(string); ok {
 							cert.ResourceID = val
 						}
@@ -329,17 +505,25 @@ func searchCertificatesByKeyword(d *schema.ResourceData, configAppViewXEnvironme
 							cert.Status = val
 						}
 
-						// Extract additional fields
+						// Date fields
 						if val, ok := certMap["validFrom"].(float64); ok {
 							cert.ValidFrom = fmt.Sprintf("%f", val)
+						} else if val, ok := certMap["validFrom"].(string); ok {
+							cert.ValidFrom = val
 						}
 						if val, ok := certMap["validTo"].(float64); ok {
 							cert.ValidTo = fmt.Sprintf("%f", val)
+						} else if val, ok := certMap["validTo"].(string); ok {
+							cert.ValidTo = val
 						}
 						if val, ok := certMap["validFor"].(string); ok {
 							cert.ValidFor = val
 						}
+
+						// Algorithm and security fields
 						if val, ok := certMap["keyAlgorithmAndSize"].(string); ok {
+							cert.KeyAlgorithm = val
+						} else if val, ok := certMap["keyAlgorithm"].(string); ok {
 							cert.KeyAlgorithm = val
 						}
 						if val, ok := certMap["signatureAlgorithm"].(string); ok {
@@ -347,8 +531,67 @@ func searchCertificatesByKeyword(d *schema.ResourceData, configAppViewXEnvironme
 						}
 						if val, ok := certMap["thumbPrint"].(string); ok {
 							cert.ThumbPrint = val
+						} else if val, ok := certMap["fingerprint"].(string); ok {
+							cert.ThumbPrint = val
 						}
 
+						// Additional metadata fields
+						if val, ok := certMap["keySize"].(float64); ok {
+							cert.KeySize = int(val)
+						} else if val, ok := certMap["keySize"].(int); ok {
+							cert.KeySize = val
+						}
+						if val, ok := certMap["version"].(string); ok {
+							cert.Version = val
+						} else if val, ok := certMap["version"].(float64); ok {
+							cert.Version = fmt.Sprintf("%.0f", val)
+						}
+						if val, ok := certMap["organization"].(string); ok {
+							cert.Organization = val
+						} else if val, ok := certMap["o"].(string); ok {
+							cert.Organization = val
+						}
+						if val, ok := certMap["organizationalUnit"].(string); ok {
+							cert.OrganizationalUnit = val
+						} else if val, ok := certMap["ou"].(string); ok {
+							cert.OrganizationalUnit = val
+						}
+						if val, ok := certMap["country"].(string); ok {
+							cert.Country = val
+						} else if val, ok := certMap["c"].(string); ok {
+							cert.Country = val
+						}
+						if val, ok := certMap["state"].(string); ok {
+							cert.State = val
+						} else if val, ok := certMap["st"].(string); ok {
+							cert.State = val
+						}
+						if val, ok := certMap["locality"].(string); ok {
+							cert.Locality = val
+						} else if val, ok := certMap["l"].(string); ok {
+							cert.Locality = val
+						}
+						if val, ok := certMap["email"].(string); ok {
+							cert.Email = val
+						} else if val, ok := certMap["emailAddress"].(string); ok {
+							cert.Email = val
+						}
+
+						// Subject Alternative Names
+						if val, ok := certMap["subjectAlternativeNames"].(string); ok {
+							cert.SubjectAlternativeNames = val
+						} else if val, ok := certMap["sans"].(string); ok {
+							cert.SubjectAlternativeNames = val
+						} else if val, ok := certMap["san"].(string); ok {
+							cert.SubjectAlternativeNames = val
+						}
+
+						// Expiry Status
+						if val, ok := certMap["expiryStatus"].(string); ok {
+							cert.ExpiryStatus = val
+						}
+
+						logger.Debug("📋 Parsed certificate: CN=%s, Serial=%s, ResourceID=%s, ExpiryStatus=%s", cert.CommonName, cert.SerialNumber, cert.ResourceID, cert.ExpiryStatus)
 						result.Certificates = append(result.Certificates, cert)
 					}
 				}
@@ -411,6 +654,25 @@ func buildSearchPayload(d *schema.ResourceData) map[string]interface{} {
 
 func resourceSearchCertificateByKeywordRead(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
 	logger.Info("ℹ️ GET OPERATION RETURNS EXISTING DATA\n")
+
+	// Preserve all certificate metadata fields to avoid drift warnings
+	certificateFields := []string{
+		"total_records", "certificate_id", "certificate_uuid", "certificate_common_name",
+		"certificate_serial_number", "certificate_issuer", "certificate_status",
+		"certificate_valid_from", "certificate_valid_to", "certificate_valid_for",
+		"certificate_key_algorithm", "certificate_signature_algorithm", "certificate_thumbprint",
+		"certificate_resource_id", "certificate_subject_alternative_names",
+		"certificate_version", "certificate_organization", "certificate_organizational_unit",
+		"certificate_country", "certificate_province", "certificate_locality", "certificate_email",
+		"certificate_expiry_status",
+	}
+
+	for _, field := range certificateFields {
+		if v, ok := d.GetOk(field); ok {
+			d.Set(field, v)
+		}
+	}
+
 	return nil
 }
 
