@@ -287,6 +287,15 @@ func resourceCertificatePushAKVCreate(d *schema.ResourceData, m interface{}) err
 		d.SetId(strconv.Itoa(rand.Int()))
 	}
 
+	// Check final operation status and throw error if failed
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("certificate push to AKV failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	if !success {
+		return fmt.Errorf("certificate push to AKV operation failed - unable to extract workflow ID from response: %s", string(body))
+	}
+
 	// Return the read function to ensure state is properly maintained
 	return resourceCertificatePushAKVRead(d, m)
 }

@@ -136,6 +136,27 @@ func resourceSearchCertificateByKeywordCreate(ctx context.Context, d *schema.Res
 
 	logger.Info("✅ Search complete with %d total records\n", result.TotalRecords)
 
+	// Check for final search validation errors after processing
+	if result.RawResponse == "" {
+		return diag.FromErr(fmt.Errorf("certificate search failed - no response received from server"))
+	}
+
+	// Check if search returned error information in the response structure
+	var responseObj map[string]interface{}
+	if err := json.Unmarshal([]byte(result.RawResponse), &responseObj); err == nil {
+		if topResponse, ok := responseObj["response"].(map[string]interface{}); ok {
+			if errorMsg, ok := topResponse["errorMessage"].(string); ok && errorMsg != "" {
+				return diag.FromErr(fmt.Errorf("certificate search failed: %s", errorMsg))
+			}
+			if status, ok := topResponse["status"].(string); ok && status != "success" {
+				if message, ok := topResponse["message"].(string); ok && message != "" {
+					return diag.FromErr(fmt.Errorf("certificate search failed with status '%s': %s", status, message))
+				} else {
+					return diag.FromErr(fmt.Errorf("certificate search failed with status: %s", status))
+				}
+			}
+		}
+	}
 	return nil
 }
 

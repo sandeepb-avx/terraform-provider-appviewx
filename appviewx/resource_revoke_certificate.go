@@ -300,6 +300,11 @@ func resourceRevokeCertificateCreate(ctx context.Context, d *schema.ResourceData
 	logger.Info("✅ Revocation process complete")
 	logger.Info("======================================================================")
 
+	// Throw error after logging and state setting if revocation failed
+	if !revocationSuccess {
+		return diag.FromErr(fmt.Errorf("certificate revocation failed with status %s: %s", resp.Status, string(responseBody)))
+	}
+
 	return nil
 }
 

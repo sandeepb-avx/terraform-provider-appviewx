@@ -13,7 +13,6 @@ import (
 
 	"terraform-provider-appviewx/appviewx/config"
 	"terraform-provider-appviewx/appviewx/logger"
-
 )
 
 // Status code constants are defined in resource_create_push_certificate_request_status.go
@@ -287,13 +286,48 @@ func revokeCertificateRequestStatusCreate(d *schema.ResourceData, m interface{})
 	// If we've exhausted retries and workflow is still not complete
 	if !completed {
 		logger.Warn(" Maximum retry count (%d) reached, but revoke workflow is still in progress", retryCount)
+
+		// Set timeout-related state information
+		d.Set("workflow_status", "Timeout")
+		d.Set("workflow_status_code", finalStatusCode)
+		d.Set("completed", false)
+		d.Set("success", false)
+		d.Set("failure_reason", fmt.Sprintf("Polling timed out after %d attempts", retryCount))
+		d.Set("response_message", fmt.Sprintf("Polling timed out before workflow completion after %d retry attempts", retryCount))
 	}
 
 	// Process and store the final response data
 	if lastResponse != nil {
 		processRevokeWorkflowResponse(d, lastResponse, finalStatusCode, completed)
 	} else {
+		// Set state for no response scenario
+		d.Set("workflow_status", "No Response")
+		d.Set("completed", false)
+		d.Set("success", false)
+		d.Set("failure_reason", fmt.Sprintf("No valid response received after %d attempts", retryCount))
+		d.Set("response_message", fmt.Sprintf("No valid response received after %d polling attempts", retryCount))
+
 		return fmt.Errorf("no valid response received after %d attempts", retryCount)
+	}
+
+	// Throw error after processing only if workflow actually failed (not timeout)
+	if finalStatusCode != STATUS_SUCCESS && completed {
+		failureReason := ""
+		if reason, ok := d.GetOk("failure_reason"); ok && reason.(string) != "" {
+			failureReason = reason.(string)
+		}
+
+		if failureReason != "" && failureReason != "No specific failure reason found in logs" {
+			return fmt.Errorf("revoke certificate workflow failed with status code %d: %s", finalStatusCode, failureReason)
+		} else {
+			return fmt.Errorf("revoke certificate workflow failed with status code %d", finalStatusCode)
+		}
+	}
+
+	// For timeout scenarios, don't throw error - just log and store state information
+	// The workflow is still in progress on AppViewX side, it's not an actual failure
+	if !completed {
+		logger.Info("Revoke workflow polling completed - workflow is still in progress on AppViewX (timeout after %d attempts)", retryCount)
 	}
 
 	return revokeCertificateRequestStatusRead(d, m)

@@ -20,7 +20,6 @@ import (
 	"terraform-provider-appviewx/appviewx/config"
 	"terraform-provider-appviewx/appviewx/constants"
 	"terraform-provider-appviewx/appviewx/logger"
-
 )
 
 // Status code constants
@@ -173,6 +172,96 @@ func CreatePushCertificateRequestStatus() *schema.Resource {
 				Type:        schema.TypeString,
 				Computed:    true,
 				Description: "Serial number of the certificate",
+			},
+			// Resource Identifiers
+			"certificate_id": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Unique identifier of the certificate in the CMS system",
+			},
+			"certificate_name": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Logical name of the certificate",
+			},
+			"key_vault_id": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Azure Key Vault resource ID where the certificate is stored",
+			},
+			"key_vault_secret_name": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Name of the secret in Azure Key Vault",
+			},
+			// Certificate Metadata
+			"subject_alternative_names": {
+				Type:        schema.TypeList,
+				Computed:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString},
+				Description: "List of Subject Alternative Names (SANs)",
+			},
+			"validity_period": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate validity period duration",
+			},
+			"issuer": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate Authority or issuer name",
+			},
+			"certificate_status": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Current certificate status (e.g., issued, pending, revoked)",
+			},
+			// Timestamps
+			"issued_at": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Timestamp when the certificate was issued",
+			},
+			"expires_at": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate expiry timestamp",
+			},
+			// Additional certificate details
+			"key_algorithm": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Key algorithm and size (e.g., RSA 2048)",
+			},
+			"signature_algorithm": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Signature algorithm used",
+			},
+			"thumbprint": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate thumbprint",
+			},
+			"certificate_uuid": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate UUID in the system",
+			},
+			"certificate_authority": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate Authority name",
+			},
+			"key_usage": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate key usage",
+			},
+			"extended_key_usage": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate extended key usage",
 			},
 		},
 		Importer: &schema.ResourceImporter{
@@ -335,13 +424,48 @@ func createPushCertificateRequestStatusCreate(d *schema.ResourceData, m interfac
 	// If we've exhausted retries and workflow is still not complete
 	if !completed {
 		logger.Warn("Maximum retry count (%d) reached, but workflow is still in progress", retryCount)
+
+		// Set timeout-related state information
+		d.Set("workflow_status", "Timeout")
+		d.Set("workflow_status_code", finalStatusCode)
+		d.Set("completed", false)
+		d.Set("success", false)
+		d.Set("failure_reason", fmt.Sprintf("Polling timed out after %d attempts", retryCount))
+		d.Set("response_message", fmt.Sprintf("Polling timed out before workflow completion after %d retry attempts", retryCount))
 	}
 
 	// Process and store the final response data
 	if lastResponse != nil {
 		processWorkflowResponse(d, m, lastResponse, finalStatusCode, completed)
 	} else {
+		// Set state for no response scenario
+		d.Set("workflow_status", "No Response")
+		d.Set("completed", false)
+		d.Set("success", false)
+		d.Set("failure_reason", fmt.Sprintf("No valid response received after %d attempts", retryCount))
+		d.Set("response_message", fmt.Sprintf("No valid response received after %d polling attempts", retryCount))
+
 		return fmt.Errorf("no valid response received after %d attempts", retryCount)
+	}
+
+	// Throw error after processing only if workflow actually failed (not timeout)
+	if finalStatusCode != STATUS_SUCCESS && completed {
+		failureReason := ""
+		if reason, ok := d.GetOk("failure_reason"); ok && reason.(string) != "" {
+			failureReason = reason.(string)
+		}
+
+		if failureReason != "" && failureReason != "No specific failure reason found in logs" {
+			return fmt.Errorf("certificate workflow failed with status code %d: %s", finalStatusCode, failureReason)
+		} else {
+			return fmt.Errorf("certificate workflow failed with status code %d", finalStatusCode)
+		}
+	}
+
+	// For timeout scenarios, don't throw error - just log and store state information
+	// The workflow is still in progress on AppViewX side, it's not an actual failure
+	if !completed {
+		logger.Info("Workflow polling completed - workflow is still in progress on AppViewX (timeout after %d attempts)", retryCount)
 	}
 
 	return createPushCertificateRequestStatusRead(d, m)
@@ -525,6 +649,9 @@ func processWorkflowResponse(d *schema.ResourceData, m interface{}, responseObj 
 						if resourceId != "" {
 							// d.Set("certificate_resource_id", resourceId)
 							logger.Info(" Saved certificate resource ID to state: %s", resourceId)
+
+							// Fetch certificate details and log comprehensive certificate information
+							fetchAndLogCertificateDetails(resourceId, commonName, d, m)
 						}
 					}
 
@@ -669,57 +796,57 @@ func buildResponseMessage(requestData map[string]interface{}, statusCode int, fa
 
 // Update the extractFailureReason function with a simpler approach
 func extractFailureReason(logs []interface{}) string {
-    // If there are no logs, we can't extract a failure reason
-    if len(logs) == 0 {
-        return "No logs found to determine failure reason"
-    }
+	// If there are no logs, we can't extract a failure reason
+	if len(logs) == 0 {
+		return "No logs found to determine failure reason"
+	}
 
-    // Special case: If second-to-last log entry contains "Request Failed.Please check the Request ID",
-    // then use the third-to-last entry which typically contains the detailed error
-    if len(logs) >= 3 {
-        // Check second-to-last entry for reference to another request ID
-        if secondToLast, ok := logs[len(logs)-2].(map[string]interface{}); ok {
-            secondToLastMsg := getStringValue(secondToLast, "message")
-            if strings.Contains(secondToLastMsg, "Request Failed.Please check the Request ID") {
-                logger.Debug("Found reference to another request ID in logs, checking third-to-last message for details")
-                
-                // Get the third-to-last log entry which should contain the actual error
-                if thirdToLast, ok := logs[len(logs)-3].(map[string]interface{}); ok {
-                    thirdToLastMsg := getStringValue(thirdToLast, "message")
-                    if thirdToLastMsg != "" {
-                        // Return the third-to-last message directly without parsing
-                        return thirdToLastMsg
-                    }
-                }
-            }
-        }
-    }
+	// Special case: If second-to-last log entry contains "Request Failed.Please check the Request ID",
+	// then use the third-to-last entry which typically contains the detailed error
+	if len(logs) >= 3 {
+		// Check second-to-last entry for reference to another request ID
+		if secondToLast, ok := logs[len(logs)-2].(map[string]interface{}); ok {
+			secondToLastMsg := getStringValue(secondToLast, "message")
+			if strings.Contains(secondToLastMsg, "Request Failed.Please check the Request ID") {
+				logger.Debug("Found reference to another request ID in logs, checking third-to-last message for details")
 
-    // Original logic for other cases
-    // Try second-to-last entry first
-    var relevantLog map[string]interface{}
+				// Get the third-to-last log entry which should contain the actual error
+				if thirdToLast, ok := logs[len(logs)-3].(map[string]interface{}); ok {
+					thirdToLastMsg := getStringValue(thirdToLast, "message")
+					if thirdToLastMsg != "" {
+						// Return the third-to-last message directly without parsing
+						return thirdToLastMsg
+					}
+				}
+			}
+		}
+	}
 
-    if len(logs) >= 2 {
-        if logEntry, ok := logs[len(logs)-2].(map[string]interface{}); ok {
-            relevantLog = logEntry
-        }
-    }
+	// Original logic for other cases
+	// Try second-to-last entry first
+	var relevantLog map[string]interface{}
 
-    // If we couldn't get the second-to-last, try the last one
-    if relevantLog == nil && len(logs) > 0 {
-        if logEntry, ok := logs[len(logs)-1].(map[string]interface{}); ok {
-            relevantLog = logEntry
-        }
-    }
+	if len(logs) >= 2 {
+		if logEntry, ok := logs[len(logs)-2].(map[string]interface{}); ok {
+			relevantLog = logEntry
+		}
+	}
 
-    // If we found a relevant log entry, extract the message
-    if relevantLog != nil {
-        if message, ok := relevantLog["message"].(string); ok && message != "" {
-            return message
-        }
-    }
+	// If we couldn't get the second-to-last, try the last one
+	if relevantLog == nil && len(logs) > 0 {
+		if logEntry, ok := logs[len(logs)-1].(map[string]interface{}); ok {
+			relevantLog = logEntry
+		}
+	}
 
-    return "No specific failure reason found in logs"
+	// If we found a relevant log entry, extract the message
+	if relevantLog != nil {
+		if message, ok := relevantLog["message"].(string); ok && message != "" {
+			return message
+		}
+	}
+
+	return "No specific failure reason found in logs"
 }
 
 // Update the processTasks function to focus on the actual failure message
@@ -981,8 +1108,8 @@ func extractCertificateResourceId(tasks []interface{}) string {
 
 // Add this function to your resource_workflow_logs.go file
 
-// fetchCertificateDetails retrieves certificate details using the resource ID
-func fetchCertificateDetails(resourceId, certType, appviewxSessionID, accessToken string, configAppViewXEnvironment *config.AppViewXEnvironment) (string, string, error) {
+// fetchCertificateDetails retrieves certificate details using the resource ID and populates terraform state
+func fetchCertificateDetails(resourceId, certType, appviewxSessionID, accessToken string, configAppViewXEnvironment *config.AppViewXEnvironment, d *schema.ResourceData) error {
 	logger.Info(" Fetching certificate details for resource ID: %s", resourceId)
 
 	// Extract configuration parameters
@@ -1014,7 +1141,7 @@ func fetchCertificateDetails(resourceId, certType, appviewxSessionID, accessToke
 	requestBody, err := json.Marshal(payload)
 	if err != nil {
 		logger.Error(" Error marshalling certificate search payload: %v", err)
-		return "", "", err
+		return err
 	}
 
 	// Create HTTP client
@@ -1024,7 +1151,7 @@ func fetchCertificateDetails(resourceId, certType, appviewxSessionID, accessToke
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(requestBody))
 	if err != nil {
 		logger.Error(" Error creating certificate search request: %v", err)
-		return "", "", err
+		return err
 	}
 
 	// Set headers
@@ -1044,7 +1171,7 @@ func fetchCertificateDetails(resourceId, certType, appviewxSessionID, accessToke
 	resp, err := client.Do(req)
 	if err != nil {
 		logger.Error(" Error making certificate search request: %v", err)
-		return "", "", err
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -1052,51 +1179,152 @@ func fetchCertificateDetails(resourceId, certType, appviewxSessionID, accessToke
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		logger.Error(" Error reading certificate search response: %v", err)
-		return "", "", err
+		return err
 	}
 
 	// Format and log JSON response for debugging
-	// var prettyJSON bytes.Buffer
-	// if json.Indent(&prettyJSON, body, "", "  ") == nil {
-	// 	logger.Debug(" Certificate search response body (formatted JSON):\n%s", prettyJSON.String())
-	// } else {
-	// 	logger.Debug(" Certificate search response body (raw):\n%s", string(body))
-	// }
+	var prettyJSON bytes.Buffer
+	if json.Indent(&prettyJSON, body, "", "  ") == nil {
+		logger.Info(" Certificate search response body (formatted JSON):\n%s", prettyJSON.String())
+	} else {
+		logger.Info(" Certificate search response body (raw):\n%s", string(body))
+	}
+
+	// Log the full response for debugging
+	logger.Info(" Certificate search response status: %d", resp.StatusCode)
+	logger.Info(" Certificate search full response:\n%s", string(body))
 
 	// Parse response to extract certificate details
 	var responseObj map[string]interface{}
 	if err := json.Unmarshal(body, &responseObj); err != nil {
 		logger.Error(" Error parsing certificate search response: %v", err)
-		return "", "", err
+		return err
 	}
 
-	// Extract certificate common name and serial number from response
-	var commonName, serialNumber string
-
+	// Extract and populate all certificate details from response
 	if resp, ok := responseObj["response"].(map[string]interface{}); ok {
 		if innerResp, ok := resp["response"].(map[string]interface{}); ok {
 			if objects, ok := innerResp["objects"].([]interface{}); ok && len(objects) > 0 {
 				if cert, ok := objects[0].(map[string]interface{}); ok {
+					logger.Info(" Successfully found certificate object, extracting details...")
+
+					// Basic certificate information
 					if cn, ok := cert["commonName"].(string); ok {
-						commonName = cn
-						logger.Info(" Found certificate common name: %s", commonName)
+						d.Set("certificate_common_name", cn)
+						logger.Info(" Set certificate_common_name: %s", cn)
 					}
 
 					if sn, ok := cert["serialNumber"].(string); ok {
-						serialNumber = sn
-						logger.Info(" Found certificate serial number: %s", serialNumber)
+						d.Set("certificate_serial_number", sn)
+						logger.Info(" Set certificate_serial_number: %s", sn)
 					}
+
+					// Resource Identifiers
+					if uuid, ok := cert["uuid"].(string); ok {
+						d.Set("certificate_uuid", uuid)
+						d.Set("certificate_id", uuid) // Using UUID as certificate ID
+						logger.Info(" Set certificate_uuid: %s", uuid)
+					}
+
+					if resourceIdFromResp, ok := cert["resourceId"].(string); ok {
+						d.Set("certificate_name", resourceIdFromResp)
+						logger.Info(" Set certificate_name: %s", resourceIdFromResp)
+					}
+
+					// Extract Azure Key Vault information from device details
+					if deviceDetails, ok := cert["deviceDetails"].(map[string]interface{}); ok {
+						if attributes, ok := deviceDetails["attributes"].(map[string]interface{}); ok {
+							if keyVaultName, ok := attributes["keyVaultName"].(string); ok {
+								d.Set("key_vault_id", keyVaultName)
+								logger.Info(" Set key_vault_id: %s", keyVaultName)
+							}
+							if certFileName, ok := attributes["certificateFileName"].(string); ok {
+								d.Set("key_vault_secret_name", certFileName)
+								logger.Info(" Set key_vault_secret_name: %s", certFileName)
+							}
+						}
+					}
+
+					// Certificate Metadata
+					if sans, ok := cert["subjectAlternativeNames"].([]interface{}); ok {
+						sanList := make([]string, len(sans))
+						for i, san := range sans {
+							if sanStr, ok := san.(string); ok {
+								sanList[i] = sanStr
+							}
+						}
+						d.Set("subject_alternative_names", sanList)
+						logger.Info(" Set subject_alternative_names: %v", sanList)
+					}
+
+					if validFor, ok := cert["validFor"].(string); ok {
+						d.Set("validity_period", validFor)
+						logger.Info(" Set validity_period: %s", validFor)
+					}
+
+					if issuer, ok := cert["issuerCommonName"].(string); ok {
+						d.Set("issuer", issuer)
+						logger.Info(" Set issuer: %s", issuer)
+					}
+
+					if status, ok := cert["status"].(string); ok {
+						d.Set("certificate_status", status)
+						logger.Info(" Set certificate_status: %s", status)
+					}
+
+					// Timestamps
+					if validFrom, ok := cert["validFrom"].(float64); ok {
+						issuedAt := time.Unix(int64(validFrom)/1000, 0).Format(time.RFC3339)
+						d.Set("issued_at", issuedAt)
+						logger.Info(" Set issued_at: %s", issuedAt)
+					}
+
+					if validTo, ok := cert["validTo"].(float64); ok {
+						expiresAt := time.Unix(int64(validTo)/1000, 0).Format(time.RFC3339)
+						d.Set("expires_at", expiresAt)
+						logger.Info(" Set expires_at: %s", expiresAt)
+					}
+
+					// Additional certificate details
+					if keyAlgo, ok := cert["keyAlgorithmAndSize"].(string); ok {
+						d.Set("key_algorithm", keyAlgo)
+						logger.Info(" Set key_algorithm: %s", keyAlgo)
+					}
+
+					if sigAlgo, ok := cert["signatureAlgorithm"].(string); ok {
+						d.Set("signature_algorithm", sigAlgo)
+						logger.Info(" Set signature_algorithm: %s", sigAlgo)
+					}
+
+					if thumbprint, ok := cert["thumbPrint"].(string); ok {
+						d.Set("thumbprint", thumbprint)
+						logger.Info(" Set thumbprint: %s", thumbprint)
+					}
+
+					if ca, ok := cert["certificateAuthority"].(string); ok {
+						d.Set("certificate_authority", ca)
+						logger.Info(" Set certificate_authority: %s", ca)
+					}
+
+					if keyUsage, ok := cert["keyUsage"].(string); ok {
+						d.Set("key_usage", keyUsage)
+						logger.Info(" Set key_usage: %s", keyUsage)
+					}
+
+					if extKeyUsage, ok := cert["extendedKeyUsage"].(string); ok {
+						d.Set("extended_key_usage", extKeyUsage)
+						logger.Info(" Set extended_key_usage: %s", extKeyUsage)
+					}
+
+					logger.Info(" Successfully populated all certificate details in terraform state")
+					return nil
 				}
 			}
 		}
 	}
 
-	if commonName == "" || serialNumber == "" {
-		logger.Warn("Could not extract certificate details from response")
-		return "", "", fmt.Errorf("certificate details not found in response")
-	}
-
-	return commonName, serialNumber, nil
+	logger.Warn(" Could not extract certificate details from response")
+	return fmt.Errorf("certificate details not found in response")
 }
 
 // downloadCertificateIfRequired handles certificate downloading if requested in configuration
@@ -1195,4 +1423,102 @@ func downloadCertificateIfRequired(resourceId string, d *schema.ResourceData, m 
 	} else {
 		logger.Error(" Failed to download certificate")
 	}
+}
+
+// fetchAndLogCertificateDetails uses the existing fetchCertificateDetails method to get and log certificate information
+func fetchAndLogCertificateDetails(resourceId, commonName string, d *schema.ResourceData, m interface{}) {
+	logger.Info("\n=== SEARCHING FOR CERTIFICATE DETAILS ===")
+	logger.Info(" Resource ID: %s", resourceId)
+	logger.Info(" Common Name: %s", commonName)
+
+	// Get configuration
+	configAppViewXEnvironment := m.(*config.AppViewXEnvironment)
+
+	// Get authentication credentials
+	appviewxUserName := configAppViewXEnvironment.AppViewXUserName
+	appviewxPassword := configAppViewXEnvironment.AppViewXPassword
+	appviewxClientId := configAppViewXEnvironment.AppViewXClientId
+	appviewxClientSecret := configAppViewXEnvironment.AppViewXClientSecret
+	appviewxEnvironmentIP := configAppViewXEnvironment.AppViewXEnvironmentIP
+	appviewxEnvironmentPort := configAppViewXEnvironment.AppViewXEnvironmentPort
+	appviewxEnvironmentIsHTTPS := configAppViewXEnvironment.AppViewXIsHTTPS
+	appviewxGwSource := "WEB"
+
+	var appviewxSessionID, accessToken string
+	var err error
+
+	// Try authentication
+	if appviewxUserName != "" && appviewxPassword != "" {
+		appviewxSessionID, err = GetSession(appviewxUserName, appviewxPassword, appviewxEnvironmentIP, appviewxEnvironmentPort, appviewxGwSource, appviewxEnvironmentIsHTTPS)
+		if err != nil {
+			logger.Error("Failed to get session for certificate search: %v", err)
+			return
+		}
+		logger.Info("Successfully authenticated using session ID")
+	} else if appviewxClientId != "" && appviewxClientSecret != "" {
+		accessToken, err = GetAccessToken(appviewxClientId, appviewxClientSecret, appviewxEnvironmentIP, appviewxEnvironmentPort, appviewxGwSource, appviewxEnvironmentIsHTTPS)
+		if err != nil {
+			logger.Error("Failed to get access token for certificate search: %v", err)
+			return
+		}
+		logger.Info("Successfully authenticated using access token")
+	} else {
+		logger.Error("No authentication credentials available for certificate search")
+		return
+	}
+
+	// Use the existing fetchCertificateDetails method
+	logger.Info("Calling fetchCertificateDetails with:")
+	logger.Info(" - Resource ID: %s", resourceId)
+	logger.Info(" - Certificate Type: Server")
+	logger.Info(" - Session ID: %s", appviewxSessionID)
+	logger.Info(" - Access Token: %s", accessToken)
+
+	err = fetchCertificateDetails(
+		resourceId,
+		"Server",
+		appviewxSessionID,
+		accessToken,
+		configAppViewXEnvironment,
+		d,
+	)
+
+	if err != nil {
+		logger.Error("Failed to fetch certificate details using resourceId: %v", err)
+		logger.Error("This error indicates the certificate search API may have issues")
+		logger.Error("Common causes: invalid resourceId, authentication issues, or API endpoint problems")
+
+		// Log the specific search parameters that failed
+		logger.Error("Search parameters that failed:")
+		logger.Error(" - Resource ID: %s", resourceId)
+		logger.Error(" - Certificate Type: Server")
+		logger.Error(" - Environment: %s:%s",
+			configAppViewXEnvironment.AppViewXEnvironmentIP,
+			configAppViewXEnvironment.AppViewXEnvironmentPort)
+		logger.Error(" - HTTPS: %t", configAppViewXEnvironment.AppViewXIsHTTPS)
+		logger.Error(" - Session ID provided: %t", appviewxSessionID != "")
+		logger.Error(" - Access Token provided: %t", accessToken != "")
+
+		return
+	}
+
+	// Log success - the details are already set in terraform state by fetchCertificateDetails
+	logger.Info("\n=== CERTIFICATE SEARCH RESULTS ===")
+	logger.Info("Certificate details successfully retrieved and populated in terraform state:")
+	logger.Info(" Common Name: %s", d.Get("certificate_common_name").(string))
+	logger.Info(" Serial Number: %s", d.Get("certificate_serial_number").(string))
+	logger.Info(" Certificate UUID: %s", d.Get("certificate_uuid").(string))
+	logger.Info(" Key Vault ID: %s", d.Get("key_vault_id").(string))
+	logger.Info(" Key Vault Secret Name: %s", d.Get("key_vault_secret_name").(string))
+	logger.Info(" Certificate Status: %s", d.Get("certificate_status").(string))
+	logger.Info(" Issuer: %s", d.Get("issuer").(string))
+	logger.Info(" Issued At: %s", d.Get("issued_at").(string))
+	logger.Info(" Expires At: %s", d.Get("expires_at").(string))
+
+	// Log SANs
+	if sans := d.Get("subject_alternative_names").([]interface{}); len(sans) > 0 {
+		logger.Info(" Subject Alternative Names: %v", sans)
+	}
+
+	logger.Info("=== CERTIFICATE SEARCH COMPLETED ===\n")
 }
