@@ -18,7 +18,7 @@ AppViewX Terraform Provider allows you to manage certificates using the AppViewX
 
 ## Installation
 
-1. Download the `terraform-provider-appviewx` binary from the [AppViweX Terraform GitHub](https://github.com/AppViewX/terraform-provider-appviewx).
+1. Download the `terraform-provider-appviewx` binary from the [AppViewX Terraform GitHub](https://github.com/AppViewX/terraform-provider-appviewx).
 2. Place the binary in your Terraform plugins directory.
 3. Configure the provider in your Terraform configuration file.
 
