@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -78,12 +80,6 @@ func ResourceSearchCertificateByKeyword() *schema.Resource {
 				Type:        schema.TypeInt,
 				Computed:    true,
 				Description: "Total number of records found",
-			},
-			// Certificate metadata fields - populated from the first certificate found
-			"certificate_id": {
-				Type:        schema.TypeString,
-				Computed:    true,
-				Description: "Certificate ID from search results",
 			},
 			"certificate_uuid": {
 				Type:        schema.TypeString,
@@ -190,6 +186,65 @@ func ResourceSearchCertificateByKeyword() *schema.Resource {
 				Computed:    true,
 				Description: "Certificate expiry status (e.g., Active, Revoked, Expired)",
 			},
+			// Azure Key Vault Information
+			"key_vault_name": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Name of the Azure Key Vault",
+			},
+			"key_vault_secret_name": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Name of the secret in Azure Key Vault",
+			},
+			// Enhanced Certificate Metadata
+			"validity_period": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate validity period duration",
+			},
+			"certificate_authority": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate Authority that issued the certificate",
+			},
+			// Epoch timestamps (Unix time in milliseconds)
+			"certificate_valid_from_epoch": {
+				Type:        schema.TypeInt,
+				Computed:    true,
+				Description: "Unix timestamp when the certificate was issued (milliseconds)",
+			},
+			"certificate_valid_to_epoch": {
+				Type:        schema.TypeInt,
+				Computed:    true,
+				Description: "Unix timestamp when the certificate expires (milliseconds)",
+			},
+			// Additional metadata from response
+			"key_usage": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate key usage",
+			},
+			"extended_key_usage": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate extended key usage",
+			},
+			"subject_key_identifier": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate subject key identifier",
+			},
+			"authority_key_identifier": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate authority key identifier",
+			},
+			"compliance_status": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Certificate compliance status",
+			},
 		},
 	}
 }
@@ -249,7 +304,6 @@ func resourceSearchCertificateByKeywordCreate(ctx context.Context, d *schema.Res
 		logger.Info("📋 Populating certificate metadata from first search result: %s", firstCert.CommonName)
 
 		// Set all the certificate metadata fields
-		d.Set("certificate_id", firstCert.ID)
 		d.Set("certificate_uuid", firstCert.UUID)
 		d.Set("certificate_common_name", firstCert.CommonName)
 		d.Set("certificate_serial_number", firstCert.SerialNumber)
@@ -258,6 +312,15 @@ func resourceSearchCertificateByKeywordCreate(ctx context.Context, d *schema.Res
 		d.Set("certificate_valid_from", firstCert.ValidFrom)
 		d.Set("certificate_valid_to", firstCert.ValidTo)
 		d.Set("certificate_valid_for", firstCert.ValidFor)
+
+		// Set epoch timestamps if available
+		if firstCert.ValidFromEpoch > 0 {
+			d.Set("certificate_valid_from_epoch", firstCert.ValidFromEpoch)
+		}
+		if firstCert.ValidToEpoch > 0 {
+			d.Set("certificate_valid_to_epoch", firstCert.ValidToEpoch)
+		}
+
 		d.Set("certificate_key_algorithm", firstCert.KeyAlgorithm)
 		d.Set("certificate_signature_algorithm", firstCert.SignatureAlgorithm)
 		d.Set("certificate_thumbprint", firstCert.ThumbPrint)
@@ -290,6 +353,39 @@ func resourceSearchCertificateByKeywordCreate(ctx context.Context, d *schema.Res
 		}
 		if firstCert.ExpiryStatus != "" {
 			d.Set("certificate_expiry_status", firstCert.ExpiryStatus)
+		}
+
+		// Azure Key Vault Information
+		if firstCert.KeyVaultName != "" {
+			d.Set("key_vault_name", firstCert.KeyVaultName)
+		}
+		if firstCert.KeyVaultSecretName != "" {
+			d.Set("key_vault_secret_name", firstCert.KeyVaultSecretName)
+		}
+
+		// Enhanced Certificate Metadata
+		if firstCert.ValidityPeriod != "" {
+			d.Set("validity_period", firstCert.ValidityPeriod)
+		}
+		if firstCert.CertificateAuthority != "" {
+			d.Set("certificate_authority", firstCert.CertificateAuthority)
+		}
+
+		// Additional security fields
+		if firstCert.KeyUsage != "" {
+			d.Set("key_usage", firstCert.KeyUsage)
+		}
+		if firstCert.ExtendedKeyUsage != "" {
+			d.Set("extended_key_usage", firstCert.ExtendedKeyUsage)
+		}
+		if firstCert.SubjectKeyIdentifier != "" {
+			d.Set("subject_key_identifier", firstCert.SubjectKeyIdentifier)
+		}
+		if firstCert.AuthorityKeyIdentifier != "" {
+			d.Set("authority_key_identifier", firstCert.AuthorityKeyIdentifier)
+		}
+		if firstCert.ComplianceStatus != "" {
+			d.Set("compliance_status", firstCert.ComplianceStatus)
 		}
 
 		logger.Info("✅ Certificate metadata populated for: %s (Serial: %s)", firstCert.CommonName, firstCert.SerialNumber)
@@ -334,15 +430,18 @@ type CertificateSearchResult struct {
 
 // Structure for certificate details
 type Certificate struct {
-	ID                      string
-	UUID                    string
-	CommonName              string
-	SerialNumber            string
-	Issuer                  string
-	Status                  string
-	ValidFrom               string
-	ValidTo                 string
-	ValidFor                string
+	ID           string
+	UUID         string
+	CommonName   string
+	SerialNumber string
+	Issuer       string
+	Status       string
+	ValidFrom    string
+	ValidTo      string
+	ValidFor     string
+	// Epoch timestamps
+	ValidFromEpoch          int64
+	ValidToEpoch            int64
 	KeyAlgorithm            string
 	SignatureAlgorithm      string
 	ThumbPrint              string
@@ -357,6 +456,17 @@ type Certificate struct {
 	Email                   string
 	SubjectAlternativeNames string
 	ExpiryStatus            string
+	// Azure Key Vault fields
+	KeyVaultName       string
+	KeyVaultSecretName string
+	// Enhanced metadata
+	ValidityPeriod         string
+	CertificateAuthority   string
+	KeyUsage               string
+	ExtendedKeyUsage       string
+	SubjectKeyIdentifier   string
+	AuthorityKeyIdentifier string
+	ComplianceStatus       string
 }
 
 func searchCertificatesByKeyword(d *schema.ResourceData, configAppViewXEnvironment *config.AppViewXEnvironment, appviewxSessionID, accessToken string) (CertificateSearchResult, error) {
@@ -505,14 +615,20 @@ func searchCertificatesByKeyword(d *schema.ResourceData, configAppViewXEnvironme
 							cert.Status = val
 						}
 
-						// Date fields
+						// Date fields - convert milliseconds to readable date format and store epoch
 						if val, ok := certMap["validFrom"].(float64); ok {
-							cert.ValidFrom = fmt.Sprintf("%f", val)
+							// Convert milliseconds to time
+							t := time.Unix(int64(val/1000), 0)
+							cert.ValidFrom = t.Format("2006-01-02 15:04:05")
+							cert.ValidFromEpoch = int64(val)
 						} else if val, ok := certMap["validFrom"].(string); ok {
 							cert.ValidFrom = val
 						}
 						if val, ok := certMap["validTo"].(float64); ok {
-							cert.ValidTo = fmt.Sprintf("%f", val)
+							// Convert milliseconds to time
+							t := time.Unix(int64(val/1000), 0)
+							cert.ValidTo = t.Format("2006-01-02 15:04:05")
+							cert.ValidToEpoch = int64(val)
 						} else if val, ok := certMap["validTo"].(string); ok {
 							cert.ValidTo = val
 						}
@@ -546,39 +662,70 @@ func searchCertificatesByKeyword(d *schema.ResourceData, configAppViewXEnvironme
 						} else if val, ok := certMap["version"].(float64); ok {
 							cert.Version = fmt.Sprintf("%.0f", val)
 						}
-						if val, ok := certMap["organization"].(string); ok {
+						// Subject fields - use the correct field names from API response
+						if val, ok := certMap["subjectOrganization"].(string); ok {
+							cert.Organization = val
+						} else if val, ok := certMap["organization"].(string); ok {
 							cert.Organization = val
 						} else if val, ok := certMap["o"].(string); ok {
 							cert.Organization = val
 						}
-						if val, ok := certMap["organizationalUnit"].(string); ok {
+						if val, ok := certMap["subjectOrganizationUnit"].(string); ok {
+							cert.OrganizationalUnit = val
+						} else if val, ok := certMap["organizationalUnit"].(string); ok {
 							cert.OrganizationalUnit = val
 						} else if val, ok := certMap["ou"].(string); ok {
 							cert.OrganizationalUnit = val
 						}
-						if val, ok := certMap["country"].(string); ok {
+						if val, ok := certMap["subjectCountry"].(string); ok {
+							cert.Country = val
+						} else if val, ok := certMap["country"].(string); ok {
 							cert.Country = val
 						} else if val, ok := certMap["c"].(string); ok {
 							cert.Country = val
 						}
-						if val, ok := certMap["state"].(string); ok {
+						if val, ok := certMap["subjectState"].(string); ok {
+							cert.State = val
+						} else if val, ok := certMap["state"].(string); ok {
 							cert.State = val
 						} else if val, ok := certMap["st"].(string); ok {
 							cert.State = val
 						}
-						if val, ok := certMap["locality"].(string); ok {
+						if val, ok := certMap["subjectLocality"].(string); ok {
+							cert.Locality = val
+						} else if val, ok := certMap["locality"].(string); ok {
 							cert.Locality = val
 						} else if val, ok := certMap["l"].(string); ok {
 							cert.Locality = val
 						}
-						if val, ok := certMap["email"].(string); ok {
-							cert.Email = val
-						} else if val, ok := certMap["emailAddress"].(string); ok {
-							cert.Email = val
+						// Extract email from subject string since it's not a separate field
+						if subject, ok := certMap["subject"].(string); ok {
+							// Parse subject string to extract email
+							if emailStart := strings.Index(subject, "EMAILADDRESS="); emailStart != -1 {
+								emailStart += len("EMAILADDRESS=")
+								emailEnd := emailStart
+								for i := emailStart; i < len(subject); i++ {
+									if subject[i] == ',' || subject[i] == ' ' {
+										break
+									}
+									emailEnd = i + 1
+								}
+								cert.Email = subject[emailStart:emailEnd]
+							}
 						}
 
-						// Subject Alternative Names
-						if val, ok := certMap["subjectAlternativeNames"].(string); ok {
+						// Subject Alternative Names - handle array format
+						if sans, ok := certMap["subjectAlternativeNames"].([]interface{}); ok {
+							var sanList []string
+							for _, san := range sans {
+								if sanStr, ok := san.(string); ok {
+									sanList = append(sanList, sanStr)
+								}
+							}
+							if len(sanList) > 0 {
+								cert.SubjectAlternativeNames = strings.Join(sanList, ", ")
+							}
+						} else if val, ok := certMap["subjectAlternativeNames"].(string); ok {
 							cert.SubjectAlternativeNames = val
 						} else if val, ok := certMap["sans"].(string); ok {
 							cert.SubjectAlternativeNames = val
@@ -589,6 +736,46 @@ func searchCertificatesByKeyword(d *schema.ResourceData, configAppViewXEnvironme
 						// Expiry Status
 						if val, ok := certMap["expiryStatus"].(string); ok {
 							cert.ExpiryStatus = val
+						}
+
+						// Azure Key Vault Information
+						if deviceDetails, ok := certMap["deviceDetails"].(map[string]interface{}); ok {
+							if val, ok := deviceDetails["deviceName"].(string); ok {
+								cert.KeyVaultName = val
+							}
+							if attributes, ok := deviceDetails["attributes"].(map[string]interface{}); ok {
+								if val, ok := attributes["certificateFileName"].(string); ok {
+									cert.KeyVaultSecretName = val
+								}
+								if val, ok := attributes["keyVaultName"].(string); ok && cert.KeyVaultName == "" {
+									cert.KeyVaultName = val
+								}
+							}
+						}
+
+						// Enhanced Certificate Metadata
+						if val, ok := certMap["validFor"].(string); ok {
+							cert.ValidityPeriod = val
+						}
+						if val, ok := certMap["certificateAuthority"].(string); ok {
+							cert.CertificateAuthority = val
+						}
+
+						// Additional security fields
+						if val, ok := certMap["keyUsage"].(string); ok {
+							cert.KeyUsage = val
+						}
+						if val, ok := certMap["extendedKeyUsage"].(string); ok {
+							cert.ExtendedKeyUsage = val
+						}
+						if val, ok := certMap["subjectKeyIdentifier"].(string); ok {
+							cert.SubjectKeyIdentifier = val
+						}
+						if val, ok := certMap["authorityKeyIdentifier"].(string); ok {
+							cert.AuthorityKeyIdentifier = val
+						}
+						if val, ok := certMap["complianceStatus"].(string); ok {
+							cert.ComplianceStatus = val
 						}
 
 						logger.Debug("📋 Parsed certificate: CN=%s, Serial=%s, ResourceID=%s, ExpiryStatus=%s", cert.CommonName, cert.SerialNumber, cert.ResourceID, cert.ExpiryStatus)
@@ -657,7 +844,7 @@ func resourceSearchCertificateByKeywordRead(ctx context.Context, d *schema.Resou
 
 	// Preserve all certificate metadata fields to avoid drift warnings
 	certificateFields := []string{
-		"total_records", "certificate_id", "certificate_uuid", "certificate_common_name",
+		"total_records", "certificate_uuid", "certificate_common_name",
 		"certificate_serial_number", "certificate_issuer", "certificate_status",
 		"certificate_valid_from", "certificate_valid_to", "certificate_valid_for",
 		"certificate_key_algorithm", "certificate_signature_algorithm", "certificate_thumbprint",
@@ -665,6 +852,13 @@ func resourceSearchCertificateByKeywordRead(ctx context.Context, d *schema.Resou
 		"certificate_version", "certificate_organization", "certificate_organizational_unit",
 		"certificate_country", "certificate_province", "certificate_locality", "certificate_email",
 		"certificate_expiry_status",
+		// Azure Key Vault fields
+		"key_vault_name", "key_vault_secret_name",
+		// Enhanced metadata fields
+		"validity_period", "certificate_authority",
+		"certificate_valid_from_epoch", "certificate_valid_to_epoch",
+		"key_usage", "extended_key_usage", "subject_key_identifier",
+		"authority_key_identifier", "compliance_status",
 	}
 
 	for _, field := range certificateFields {

@@ -145,17 +145,15 @@ func CreatePushCertificateRequestStatus() *schema.Resource {
 				Description: "Path to download the certificate to",
 			},
 			"certificate_download_format": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Default:  "CRT",
-				// ForceNew:    true,
+				Type:        schema.TypeString,
+				Optional:    true,
+				Default:     "CRT",
 				Description: "Format for the downloaded certificate (e.g., CRT, PFX)",
 			},
 			"certificate_chain_required": {
-				Type:     schema.TypeBool,
-				Optional: true,
-				Default:  true,
-				// ForceNew:    true,
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Default:     true,
 				Description: "Whether to include the certificate chain in the download",
 			},
 			"downloaded_certificate_path": {
@@ -173,18 +171,12 @@ func CreatePushCertificateRequestStatus() *schema.Resource {
 				Computed:    true,
 				Description: "Serial number of the certificate",
 			},
-			// Resource Identifiers
-			"certificate_id": {
+			"certificate_resource_id": {
 				Type:        schema.TypeString,
 				Computed:    true,
-				Description: "Unique identifier of the certificate in the CMS system",
+				Description: "Certificate resource ID in AppViewX",
 			},
-			"certificate_name": {
-				Type:        schema.TypeString,
-				Computed:    true,
-				Description: "Logical name of the certificate",
-			},
-			"key_vault_id": {
+			"key_vault_name": {
 				Type:        schema.TypeString,
 				Computed:    true,
 				Description: "Azure Key Vault resource ID where the certificate is stored",
@@ -226,6 +218,22 @@ func CreatePushCertificateRequestStatus() *schema.Resource {
 				Type:        schema.TypeString,
 				Computed:    true,
 				Description: "Certificate expiry timestamp",
+			},
+			// Epoch timestamps (Unix time in milliseconds)
+			"issued_at_epoch": {
+				Type:        schema.TypeInt,
+				Computed:    true,
+				Description: "Unix timestamp when the certificate was issued (milliseconds)",
+			},
+			"expires_at_epoch": {
+				Type:        schema.TypeInt,
+				Computed:    true,
+				Description: "Unix timestamp when the certificate expires (milliseconds)",
+			},
+			"created_time_epoch": {
+				Type:        schema.TypeInt,
+				Computed:    true,
+				Description: "Unix timestamp when the workflow was created (milliseconds)",
 			},
 			// Additional certificate details
 			"key_algorithm": {
@@ -318,8 +326,8 @@ func createPushCertificateRequestStatusCreate(d *schema.ResourceData, m interfac
 		d.Set("completed", true)
 		d.Set("success", false)
 		d.Set("response_message", "Workflow polling was skipped because no request ID was provided")
-		d.Set("last_polled_time", time.Now().Format(time.RFC3339))
-		d.Set("completion_time", time.Now().Format(time.RFC3339))
+		d.Set("last_polled_time", time.Now().Format("2006-01-02 15:04:05"))
+		d.Set("completion_time", time.Now().Format("2006-01-02 15:04:05"))
 
 		return nil
 	}
@@ -402,7 +410,7 @@ func createPushCertificateRequestStatusCreate(d *schema.ResourceData, m interfac
 		lastResponse = responseObj
 
 		// Record last polled time
-		d.Set("last_polled_time", time.Now().Format(time.RFC3339))
+		d.Set("last_polled_time", time.Now().Format("2006-01-02 15:04:05"))
 
 		// Check if the workflow has completed
 		statusCode, completed = getWorkflowStatusCode(responseObj)
@@ -424,7 +432,7 @@ func createPushCertificateRequestStatusCreate(d *schema.ResourceData, m interfac
 	}
 
 	// Record completion time
-	d.Set("completion_time", time.Now().Format(time.RFC3339))
+	d.Set("completion_time", time.Now().Format("2006-01-02 15:04:05"))
 
 	// If we've exhausted retries and workflow is still not complete
 	if !completed {
@@ -616,9 +624,10 @@ func processWorkflowResponse(d *schema.ResourceData, m interface{}, responseObj 
 				}
 
 				if createdTime, ok := firstRequest["created_time"].(float64); ok {
-					// Convert Unix timestamp to readable format
+					// Convert Unix timestamp to readable format and store epoch
 					t := time.Unix(int64(createdTime)/1000, 0)
-					d.Set("created_time", t.Format(time.RFC3339))
+					d.Set("created_time", t.Format("2006-01-02 15:04:05"))
+					d.Set("created_time_epoch", int64(createdTime))
 				}
 
 				// Set success flag based on status code
@@ -1224,24 +1233,22 @@ func fetchCertificateDetails(resourceId, certType, appviewxSessionID, accessToke
 						logger.Info(" Set certificate_serial_number: %s", sn)
 					}
 
-					// Resource Identifiers
-					if uuid, ok := cert["uuid"].(string); ok {
-						d.Set("certificate_uuid", uuid)
-						d.Set("certificate_id", uuid) // Using UUID as certificate ID
-						logger.Info(" Set certificate_uuid: %s", uuid)
+					if resourceIdFromResp, ok := cert["resourceId"].(string); ok {
+						d.Set("certificate_resource_id", resourceIdFromResp)
+						logger.Info(" Set certificate_resource_id: %s", resourceIdFromResp)
 					}
 
-					if resourceIdFromResp, ok := cert["resourceId"].(string); ok {
-						d.Set("certificate_name", resourceIdFromResp)
-						logger.Info(" Set certificate_name: %s", resourceIdFromResp)
+					if uuid, ok := cert["uuid"].(string); ok {
+						d.Set("certificate_uuid", uuid)
+						logger.Info(" Set certificate_uuid: %s", uuid)
 					}
 
 					// Extract Azure Key Vault information from device details
 					if deviceDetails, ok := cert["deviceDetails"].(map[string]interface{}); ok {
 						if attributes, ok := deviceDetails["attributes"].(map[string]interface{}); ok {
 							if keyVaultName, ok := attributes["keyVaultName"].(string); ok {
-								d.Set("key_vault_id", keyVaultName)
-								logger.Info(" Set key_vault_id: %s", keyVaultName)
+								d.Set("key_vault_name", keyVaultName)
+								logger.Info(" Set key_vault_name: %s", keyVaultName)
 							}
 							if certFileName, ok := attributes["certificateFileName"].(string); ok {
 								d.Set("key_vault_secret_name", certFileName)
@@ -1277,20 +1284,20 @@ func fetchCertificateDetails(resourceId, certType, appviewxSessionID, accessToke
 						logger.Info(" Set certificate_status: %s", status)
 					}
 
-					// Timestamps
+					// Timestamps - convert milliseconds to readable date format and store epoch
 					if validFrom, ok := cert["validFrom"].(float64); ok {
-						issuedAt := time.Unix(int64(validFrom)/1000, 0).Format(time.RFC3339)
+						issuedAt := time.Unix(int64(validFrom)/1000, 0).Format("2006-01-02 15:04:05")
 						d.Set("issued_at", issuedAt)
-						logger.Info(" Set issued_at: %s", issuedAt)
+						d.Set("issued_at_epoch", int64(validFrom))
+						logger.Info(" Set issued_at: %s (epoch: %d)", issuedAt, int64(validFrom))
 					}
 
 					if validTo, ok := cert["validTo"].(float64); ok {
-						expiresAt := time.Unix(int64(validTo)/1000, 0).Format(time.RFC3339)
+						expiresAt := time.Unix(int64(validTo)/1000, 0).Format("2006-01-02 15:04:05")
 						d.Set("expires_at", expiresAt)
-						logger.Info(" Set expires_at: %s", expiresAt)
-					}
-
-					// Additional certificate details
+						d.Set("expires_at_epoch", int64(validTo))
+						logger.Info(" Set expires_at: %s (epoch: %d)", expiresAt, int64(validTo))
+					} // Additional certificate details
 					if keyAlgo, ok := cert["keyAlgorithmAndSize"].(string); ok {
 						d.Set("key_algorithm", keyAlgo)
 						logger.Info(" Set key_algorithm: %s", keyAlgo)
@@ -1518,7 +1525,8 @@ func fetchAndLogCertificateDetails(resourceId, commonName string, d *schema.Reso
 	logger.Info(" Common Name: %s", d.Get("certificate_common_name").(string))
 	logger.Info(" Serial Number: %s", d.Get("certificate_serial_number").(string))
 	logger.Info(" Certificate UUID: %s", d.Get("certificate_uuid").(string))
-	logger.Info(" Key Vault ID: %s", d.Get("key_vault_id").(string))
+	logger.Info(" Resource ID: %s", d.Get("certificate_resource_id").(string))
+	logger.Info(" Key Vault Name: %s", d.Get("key_vault_name").(string))
 	logger.Info(" Key Vault Secret Name: %s", d.Get("key_vault_secret_name").(string))
 	logger.Info(" Certificate Status: %s", d.Get("certificate_status").(string))
 	logger.Info(" Issuer: %s", d.Get("issuer").(string))
