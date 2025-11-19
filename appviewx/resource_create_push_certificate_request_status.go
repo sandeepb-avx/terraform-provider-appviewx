@@ -1235,12 +1235,10 @@ func fetchCertificateDetails(resourceId, certType, appviewxSessionID, accessToke
 
 					if resourceIdFromResp, ok := cert["resourceId"].(string); ok {
 						d.Set("certificate_resource_id", resourceIdFromResp)
-						logger.Info(" Set certificate_resource_id: %s", resourceIdFromResp)
 					}
 
 					if uuid, ok := cert["uuid"].(string); ok {
 						d.Set("certificate_uuid", uuid)
-						logger.Info(" Set certificate_uuid: %s", uuid)
 					}
 
 					// Extract Azure Key Vault information from device details
@@ -1248,11 +1246,9 @@ func fetchCertificateDetails(resourceId, certType, appviewxSessionID, accessToke
 						if attributes, ok := deviceDetails["attributes"].(map[string]interface{}); ok {
 							if keyVaultName, ok := attributes["keyVaultName"].(string); ok {
 								d.Set("key_vault_name", keyVaultName)
-								logger.Info(" Set key_vault_name: %s", keyVaultName)
 							}
 							if certFileName, ok := attributes["certificateFileName"].(string); ok {
 								d.Set("key_vault_secret_name", certFileName)
-								logger.Info(" Set key_vault_secret_name: %s", certFileName)
 							}
 						}
 					}
@@ -1266,7 +1262,6 @@ func fetchCertificateDetails(resourceId, certType, appviewxSessionID, accessToke
 							}
 						}
 						d.Set("subject_alternative_names", sanList)
-						logger.Info(" Set subject_alternative_names: %v", sanList)
 					}
 
 					if validFor, ok := cert["validFor"].(string); ok {
@@ -1276,12 +1271,10 @@ func fetchCertificateDetails(resourceId, certType, appviewxSessionID, accessToke
 
 					if issuer, ok := cert["issuerCommonName"].(string); ok {
 						d.Set("issuer", issuer)
-						logger.Info(" Set issuer: %s", issuer)
 					}
 
 					if status, ok := cert["status"].(string); ok {
 						d.Set("certificate_status", status)
-						logger.Info(" Set certificate_status: %s", status)
 					}
 
 					// Timestamps - convert milliseconds to readable date format and store epoch
@@ -1300,37 +1293,30 @@ func fetchCertificateDetails(resourceId, certType, appviewxSessionID, accessToke
 					} // Additional certificate details
 					if keyAlgo, ok := cert["keyAlgorithmAndSize"].(string); ok {
 						d.Set("key_algorithm", keyAlgo)
-						logger.Info(" Set key_algorithm: %s", keyAlgo)
 					}
 
 					if sigAlgo, ok := cert["signatureAlgorithm"].(string); ok {
 						d.Set("signature_algorithm", sigAlgo)
-						logger.Info(" Set signature_algorithm: %s", sigAlgo)
 					}
 
 					if thumbprint, ok := cert["thumbPrint"].(string); ok {
 						d.Set("thumbprint", thumbprint)
-						logger.Info(" Set thumbprint: %s", thumbprint)
 					}
 
 					if ca, ok := cert["certificateAuthority"].(string); ok {
 						d.Set("certificate_authority", ca)
-						logger.Info(" Set certificate_authority: %s", ca)
 					}
 
 					if keyUsage, ok := cert["keyUsage"].(string); ok {
 						d.Set("key_usage", keyUsage)
-						logger.Info(" Set key_usage: %s", keyUsage)
 					}
 
 					if extKeyUsage, ok := cert["extendedKeyUsage"].(string); ok {
 						d.Set("extended_key_usage", extKeyUsage)
-						logger.Info(" Set extended_key_usage: %s", extKeyUsage)
 					}
 
 					if expiryStatus, ok := cert["expiryStatus"].(string); ok {
 						d.Set("certificate_expiry_status", expiryStatus)
-						logger.Info(" Set certificate_expiry_status: %s", expiryStatus)
 					}
 
 					logger.Info(" Successfully populated all certificate details in terraform state")
@@ -1488,8 +1474,6 @@ func fetchAndLogCertificateDetails(resourceId, commonName string, d *schema.Reso
 	logger.Info("Calling fetchCertificateDetails with:")
 	logger.Info(" - Resource ID: %s", resourceId)
 	logger.Info(" - Certificate Type: Server")
-	logger.Info(" - Session ID: %s", appviewxSessionID)
-	logger.Info(" - Access Token: %s", accessToken)
 
 	err = fetchCertificateDetails(
 		resourceId,
@@ -1524,19 +1508,5 @@ func fetchAndLogCertificateDetails(resourceId, commonName string, d *schema.Reso
 	logger.Info("Certificate details successfully retrieved and populated in terraform state:")
 	logger.Info(" Common Name: %s", d.Get("certificate_common_name").(string))
 	logger.Info(" Serial Number: %s", d.Get("certificate_serial_number").(string))
-	logger.Info(" Certificate UUID: %s", d.Get("certificate_uuid").(string))
-	logger.Info(" Resource ID: %s", d.Get("certificate_resource_id").(string))
-	logger.Info(" Key Vault Name: %s", d.Get("key_vault_name").(string))
-	logger.Info(" Key Vault Secret Name: %s", d.Get("key_vault_secret_name").(string))
-	logger.Info(" Certificate Status: %s", d.Get("certificate_status").(string))
-	logger.Info(" Issuer: %s", d.Get("issuer").(string))
-	logger.Info(" Issued At: %s", d.Get("issued_at").(string))
-	logger.Info(" Expires At: %s", d.Get("expires_at").(string))
-
-	// Log SANs
-	if sans := d.Get("subject_alternative_names").([]interface{}); len(sans) > 0 {
-		logger.Info(" Subject Alternative Names: %v", sans)
-	}
-
 	logger.Info("=== CERTIFICATE SEARCH COMPLETED ===\n")
 }
