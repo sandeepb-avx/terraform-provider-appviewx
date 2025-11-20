@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"math/rand"
 	"net/http"
 	"regexp"
@@ -293,9 +294,624 @@ func createPushCertificateRequestStatusRead(d *schema.ResourceData, m interface{
 }
 
 func createPushCertificateRequestStatusDelete(d *schema.ResourceData, m interface{}) error {
-	logger.Info(" **************** DELETE OPERATION FOR WORKFLOW LOGS **************** ")
-	// Since this is a read-only resource, deletion just removes it from state
+	logger.Info(" **************** DELETE OPERATION - TRIGGERING CERTIFICATE REVOCATION **************** ")
+
+	// Get certificate resource ID from state (we already have it!)
+	resourceId := ""
+	certificateCommonName := ""
+	serialNumber := ""
+
+	if rid, ok := d.GetOk("certificate_resource_id"); ok {
+		resourceId = rid.(string)
+	}
+	if cn, ok := d.GetOk("certificate_common_name"); ok {
+		certificateCommonName = cn.(string)
+	}
+	if sn, ok := d.GetOk("certificate_serial_number"); ok {
+		serialNumber = sn.(string)
+	}
+
+	// Check if we have the required information for revocation
+	if resourceId == "" {
+		logger.Warn("Cannot trigger certificate revocation - missing certificate resource ID in state")
+		logger.Info("Proceeding with state cleanup only")
+		d.SetId("")
+		return nil
+	}
+
+	logger.Info("Triggering certificate revocation using resource ID from state:")
+	logger.Info(" - Certificate: %s", certificateCommonName)
+	logger.Info(" - Serial Number: %s", serialNumber)
+	logger.Info(" - Resource ID: %s", resourceId)
+
+	// Call the simplified revocation function using resource ID directly
+	err := revokeCertificateDirectly(resourceId, d, m)
+	if err != nil {
+		logger.Error("Failed to revoke certificate: %v", err)
+		// Don't return error - we still want to clean up the state
+		logger.Info("Proceeding with state cleanup despite revocation failure")
+	} else {
+		logger.Info("Certificate revocation completed successfully")
+	}
+
+	// Remove from state regardless of revocation result
 	d.SetId("")
+	return nil
+}
+
+// revokeCertificateDirectly revokes a certificate using the resource ID directly from state
+func revokeCertificateDirectly(resourceId string, d *schema.ResourceData, m interface{}) error {
+	logger.Info("=== CERTIFICATE REVOCATION USING RESOURCE ID ===")
+	logger.Info(" - Resource ID: %s", resourceId)
+
+	// Get AppViewX configuration
+	configAppViewXEnvironment := m.(*config.AppViewXEnvironment)
+	appviewxUserName := configAppViewXEnvironment.AppViewXUserName
+	appviewxPassword := configAppViewXEnvironment.AppViewXPassword
+	appviewxClientId := configAppViewXEnvironment.AppViewXClientId
+	appviewxClientSecret := configAppViewXEnvironment.AppViewXClientSecret
+	appviewxEnvironmentIP := configAppViewXEnvironment.AppViewXEnvironmentIP
+	appviewxEnvironmentPort := configAppViewXEnvironment.AppViewXEnvironmentPort
+	appviewxEnvironmentIsHTTPS := configAppViewXEnvironment.AppViewXIsHTTPS
+	appviewxGwSource := "external"
+
+	// Authenticate using either username/password or client ID/secret
+	var appviewxSessionID, accessToken string
+	var err error
+
+	if appviewxUserName != "" && appviewxPassword != "" {
+		appviewxSessionID, err = GetSession(appviewxUserName, appviewxPassword, appviewxEnvironmentIP, appviewxEnvironmentPort, "WEB", appviewxEnvironmentIsHTTPS)
+		if err != nil {
+			logger.Error("Error in getting the session: %v", err)
+			return err
+		}
+		logger.Info("Successfully authenticated using session ID")
+	} else if appviewxClientId != "" && appviewxClientSecret != "" {
+		accessToken, err = GetAccessToken(appviewxClientId, appviewxClientSecret, appviewxEnvironmentIP, appviewxEnvironmentPort, "WEB", appviewxEnvironmentIsHTTPS)
+		if err != nil {
+			logger.Error("Error in getting the access token: %v", err)
+			return err
+		}
+		logger.Info("Successfully authenticated using access token")
+	} else {
+		return fmt.Errorf("authentication failed - provide either username/password or client ID/secret")
+	}
+
+	// Build revocation payload using resource ID directly
+	payload := map[string]interface{}{
+		"resourceId": resourceId,
+		"reason":     "Cessation of operation", // Standard reason for destroy operations
+		"comments":   "Automatic revocation triggered by Terraform destroy",
+	}
+
+	// Set query parameters
+	queryParams := map[string]string{
+		"gwsource": appviewxGwSource,
+	}
+
+	// Get URL for the revoke endpoint
+	url := GetURL(appviewxEnvironmentIP, appviewxEnvironmentPort, "certificate/revoke", queryParams, appviewxEnvironmentIsHTTPS)
+	logger.Debug("🌐 Revoking certificate using URL: %s", url)
+
+	// Prepare the request
+	requestBody, err := json.Marshal(payload)
+	if err != nil {
+		logger.Error("Error marshalling payload: %v", err)
+		return err
+	}
+
+	// Log the request for debugging
+	payloadBytes, _ := json.MarshalIndent(payload, "", "  ")
+	logger.Debug("📝 Revocation payload:\n%s\n", string(payloadBytes))
+
+	// Create HTTP client and request
+	client := &http.Client{Transport: HTTPTransport()}
+	req, err := http.NewRequest(http.MethodPut, url, bytes.NewBuffer(requestBody))
+	if err != nil {
+		logger.Error("Error creating request: %v", err)
+		return err
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	// Add authentication header
+	if appviewxSessionID != "" {
+		logger.Debug("🔑 Using session ID for authentication")
+		req.Header.Set(constants.SESSION_ID, appviewxSessionID)
+	} else if accessToken != "" {
+		logger.Debug("🔑 Using access token for authentication")
+		req.Header.Set(constants.TOKEN, accessToken)
+	}
+
+	// Make the request
+	logger.Info("📤 Sending certificate revocation request...")
+	resp, err := client.Do(req)
+	if err != nil {
+		logger.Error("Error making revocation request: %v", err)
+		return err
+	}
+	defer resp.Body.Close()
+
+	logger.Info("📊 Certificate revocation response status: %s", resp.Status)
+
+	// Read response body
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logger.Error("Error reading response: %v", err)
+		return err
+	}
+
+	// Format and log JSON response
+	var prettyJSON bytes.Buffer
+	if err := json.Indent(&prettyJSON, responseBody, "", "  "); err == nil {
+		logger.Info("📦 Revocation response:\n%s\n", prettyJSON.String())
+	} else {
+		logger.Info("📦 Revocation response (raw):\n%s\n", string(responseBody))
+	}
+
+	// Parse response to extract request ID for status monitoring
+	var requestId string
+	var responseObj map[string]interface{}
+	if err := json.Unmarshal(responseBody, &responseObj); err == nil {
+		logger.Info("🔍 Parsed response object successfully")
+
+		// Debug: Print the top-level keys
+		logger.Info("📋 Top-level response keys:")
+		for key := range responseObj {
+			logger.Info("   - %s", key)
+		}
+
+		// Try to extract request ID from response.requestId
+		if response, ok := responseObj["response"].(map[string]interface{}); ok {
+			logger.Info("🔍 Found 'response' object, checking for requestId")
+			if reqId, ok := response["requestId"].(string); ok && reqId != "" {
+				requestId = reqId
+				logger.Info("🔑 Found request ID: %s", requestId)
+			} else {
+				logger.Info("⚠️ No 'requestId' found in response object")
+				// Debug: Print response object keys
+				logger.Info("📋 Response object keys:")
+				for key := range response {
+					logger.Info("   - %s", key)
+				}
+			}
+		} else {
+			logger.Info("⚠️ No 'response' object found in top-level response")
+		}
+
+		// Try alternative fields if standard didn't work
+		if requestId == "" {
+			possibleFields := []string{"requestId", "request_id", "id", "workflowId", "workflow_id"}
+			for _, field := range possibleFields {
+				if reqId, ok := responseObj[field].(string); ok && reqId != "" {
+					requestId = reqId
+					logger.Info("🔑 Found request ID in field '%s': %s", field, requestId)
+					break
+				}
+			}
+		}
+	} else {
+		logger.Error("❌ Failed to parse JSON response: %v", err)
+	}
+
+	// Check if revocation was successful
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		logger.Info("✅ Certificate revocation request submitted successfully")
+
+		// If we have a request ID, start status monitoring using the existing polling logic
+		if requestId != "" {
+			logger.Info("🔄 Starting revocation status monitoring...")
+			err := monitorRevocationStatus(requestId, d, m)
+			if err != nil {
+				logger.Error("❌ Error during status monitoring: %v", err)
+				// Don't fail the operation - revocation was submitted successfully
+			}
+		} else {
+			logger.Warn("⚠️ No request ID found - cannot monitor revocation status")
+		}
+
+		return nil
+	} else {
+		logger.Error("❌ Certificate revocation failed with status: %s", resp.Status)
+		return fmt.Errorf("certificate revocation failed with status %s: %s", resp.Status, string(responseBody))
+	}
+}
+
+// monitorRevocationStatus monitors revocation workflow status using the same logic as resource_revoke_certificate_request_status.go
+func monitorRevocationStatus(requestId string, d *schema.ResourceData, m interface{}) error {
+	logger.Info("🔄 Starting revocation status monitoring for request ID: %s", requestId)
+
+	configAppViewXEnvironment := m.(*config.AppViewXEnvironment)
+
+	// Use the same retry settings as resource_revoke_certificate_request_status.go
+	retryCount := 10
+	retryInterval := 20 // seconds
+
+	appviewxUserName := configAppViewXEnvironment.AppViewXUserName
+	appviewxPassword := configAppViewXEnvironment.AppViewXPassword
+	appviewxClientId := configAppViewXEnvironment.AppViewXClientId
+	appviewxClientSecret := configAppViewXEnvironment.AppViewXClientSecret
+	appviewxEnvironmentIP := configAppViewXEnvironment.AppViewXEnvironmentIP
+	appviewxEnvironmentPort := configAppViewXEnvironment.AppViewXEnvironmentPort
+	appviewxEnvironmentIsHTTPS := configAppViewXEnvironment.AppViewXIsHTTPS
+	appviewxGwSource := "external"
+
+	var completed bool = false
+	var finalStatusCode int = STATUS_IN_PROGRESS
+
+	// Start polling loop - same as resource_revoke_certificate_request_status.go
+	for attempt := 1; attempt <= retryCount; attempt++ {
+		logger.Info("🔍 Polling attempt %d/%d for revocation request ID: %s", attempt, retryCount, requestId)
+
+		// Get authentication token for this request
+		appviewxSessionID, accessToken, err := authenticate(
+			appviewxUserName, appviewxPassword,
+			appviewxClientId, appviewxClientSecret,
+			appviewxEnvironmentIP, appviewxEnvironmentPort,
+			appviewxEnvironmentIsHTTPS)
+
+		if err != nil {
+			logger.Error("❌ Authentication failed on polling attempt %d: %v", attempt, err)
+			if attempt == retryCount {
+				return fmt.Errorf("authentication failed after %d attempts: %v", retryCount, err)
+			}
+			time.Sleep(time.Duration(retryInterval) * time.Second)
+			continue
+		}
+
+		// Poll the workflow status using the existing function
+		_, respBody, err := pollWorkflowStatus(
+			appviewxEnvironmentIP, appviewxEnvironmentPort,
+			appviewxEnvironmentIsHTTPS, appviewxSessionID,
+			accessToken, requestId, appviewxGwSource)
+
+		if err != nil {
+			logger.Error("❌ Failed to poll workflow status on attempt %d: %v", attempt, err)
+			if attempt == retryCount {
+				return fmt.Errorf("failed to poll workflow status after %d attempts: %v", retryCount, err)
+			}
+			time.Sleep(time.Duration(retryInterval) * time.Second)
+			continue
+		}
+
+		// Parse the response
+		var responseObj map[string]interface{}
+		if err := json.Unmarshal(respBody, &responseObj); err != nil {
+			logger.Error("❌ Failed to parse response JSON on attempt %d: %v", attempt, err)
+			if attempt == retryCount {
+				return fmt.Errorf("failed to parse response: %v", err)
+			}
+			time.Sleep(time.Duration(retryInterval) * time.Second)
+			continue
+		}
+
+		// Check if the workflow has completed using the existing function
+		finalStatusCode, completed = getWorkflowStatusCode(responseObj)
+
+		if completed {
+			logger.Info("✅ Revocation workflow completed with status code: %d", finalStatusCode)
+
+			// Check success/failure
+			isSuccess := finalStatusCode == STATUS_SUCCESS
+
+			// Pretty logging for success or failure - same as resource_revoke_certificate_request_status.go
+			var failureReason string = ""
+
+			if resp, ok := responseObj["response"].(map[string]interface{}); ok {
+				if requestList, ok := resp["requestList"].([]interface{}); ok && len(requestList) > 0 {
+					if firstRequest, ok := requestList[0].(map[string]interface{}); ok {
+
+						if isSuccess {
+							// Create a success summary with safe handling of resource_id
+							successData := map[string]interface{}{
+								"operation":    "Certificate Revocation",
+								"status":       "Successful",
+								"workflow_id":  requestId,
+								"status_code":  finalStatusCode,
+								"completed_at": time.Now().Format(time.RFC3339),
+							}
+
+							// Add certificate resource ID if available from state
+							if resourceId, ok := d.GetOk("certificate_resource_id"); ok {
+								successData["certificate_resource_id"] = resourceId.(string)
+							}
+
+							successJSON, _ := json.MarshalIndent(successData, "", "  ")
+							successMessage := fmt.Sprintf("\n[CERTIFICATE REVOCATION][SUCCESS] ✅ Operation Result:\n%s\n", string(successJSON))
+							log.Println(successMessage)
+							logger.Info("🎉 Certificate revocation completed successfully!")
+
+						} else if completed {
+							// Create a failure summary for completed but failed workflows
+							failureData := map[string]interface{}{
+								"operation":    "Certificate Revocation",
+								"status":       "Failed",
+								"workflow_id":  requestId,
+								"status_code":  finalStatusCode,
+								"completed_at": time.Now().Format(time.RFC3339),
+							}
+
+							// Add failure reason if available
+							if tasks, ok := firstRequest["tasks"].([]interface{}); ok {
+								_, _, failureReason = processTasks(tasks, isSuccess)
+
+								if failureReason != "" && failureReason != "No specific failure reason found in logs" {
+									failureData["failure_reason"] = failureReason
+								} else {
+									// Try to find failure info directly in the workflow response
+									if message, ok := firstRequest["message"].(string); ok && message != "" {
+										if containsAny(message, []string{"Failed", "Error", "failed", "error"}) {
+											failureReason = message
+											failureData["failure_reason"] = failureReason
+										}
+									}
+
+									// If still no reason, check if there's a tooltip
+									if tooltip, ok := firstRequest["toolTip"].(string); ok && tooltip != "" {
+										failureReason = tooltip
+										failureData["failure_reason"] = failureReason
+									}
+								}
+							}
+
+							failureJSON, _ := json.MarshalIndent(failureData, "", "  ")
+							failureMessage := fmt.Sprintf("\n[CERTIFICATE REVOCATION][FAILURE] ❌ Operation Result:\n%s\n", string(failureJSON))
+							log.Println(failureMessage)
+							logger.Warn("⚠️ Certificate revocation failed with status: %d", finalStatusCode)
+						}
+
+						// Process tasks and extract failure information if needed - for detailed logging
+						if tasks, ok := firstRequest["tasks"].([]interface{}); ok {
+							// Log how many tasks we found
+							logger.Debug("🔍 Found %d tasks in revoke workflow response", len(tasks))
+
+							if !isSuccess && failureReason == "" {
+								_, _, failureReason = processTasks(tasks, isSuccess)
+
+								if failureReason == "No specific failure reason found in logs" {
+									// Try to find failure info directly in the workflow response
+									if message, ok := firstRequest["message"].(string); ok && message != "" {
+										logger.Debug("🔍 Found message in workflow: %s", message)
+										if containsAny(message, []string{"Failed", "Error", "failed", "error"}) {
+											failureReason = message
+										}
+									}
+
+									// If still no reason, check if there's a tooltip
+									if tooltip, ok := firstRequest["toolTip"].(string); ok && tooltip != "" {
+										logger.Debug("🔍 Found tooltip in workflow: %s", tooltip)
+										failureReason = tooltip
+									}
+								}
+
+								if failureReason != "" && failureReason != "No specific failure reason found in logs" {
+									logger.Error("❌ Revocation failure reason: %s", failureReason)
+								}
+							}
+						} else {
+							logger.Warn("⚠️ No tasks found in revoke workflow response")
+						}
+					}
+				}
+			}
+
+			break
+		} else {
+			logger.Info("⏳ Revocation workflow still in progress (status: %d)...", finalStatusCode)
+		}
+
+		// Wait before next attempt if not completed and not last attempt
+		if !completed && attempt < retryCount {
+			logger.Info("⏱️ Waiting %d seconds before next polling attempt...", retryInterval)
+			time.Sleep(time.Duration(retryInterval) * time.Second)
+		}
+	}
+
+	if !completed {
+		logger.Warn("⚠️ Revocation status monitoring timed out after %d attempts. Workflow may still be in progress.", retryCount)
+		return fmt.Errorf("revocation status monitoring timed out after %d attempts", retryCount)
+	}
+
+	return nil
+}
+
+// triggerCertificateRevocation calls the revocation workflow using certificate details
+func triggerCertificateRevocation(serialNumber, issuerCommonName, certificateCommonName string, d *schema.ResourceData, m interface{}) error {
+	logger.Info("=== CERTIFICATE REVOCATION WORKFLOW ===")
+	logger.Info("Serial Number: %s", serialNumber)
+	logger.Info("Issuer: %s", issuerCommonName)
+	logger.Info("Certificate CN: %s", certificateCommonName)
+
+	// Call the existing revocation logic - same as resource_revoke_certificate.go
+	logger.Info("Calling certificate revocation using existing logic from resource_revoke_certificate.go")
+	err := performCertificateRevocation(serialNumber, issuerCommonName, "Cessation of operation", "Automatic revocation triggered by Terraform destroy", d, m)
+	if err != nil {
+		logger.Error("Failed to revoke certificate: %v", err)
+		// Don't return error - we still want to clean up the state
+		logger.Info("Proceeding with state cleanup despite revocation failure")
+	} else {
+		logger.Info("Certificate revocation completed successfully")
+	}
+
+	logger.Info("=== CERTIFICATE REVOCATION COMPLETED ===")
+	return nil
+}
+
+// performCertificateRevocation implements the exact same revocation logic as resource_revoke_certificate.go
+func performCertificateRevocation(serialNumber, issuerCommonName, reason, comments string, d *schema.ResourceData, m interface{}) error {
+	configAppViewXEnvironment := m.(*config.AppViewXEnvironment)
+
+	// Authentication credentials - same as resource_revoke_certificate.go
+	appviewxUserName := configAppViewXEnvironment.AppViewXUserName
+	appviewxPassword := configAppViewXEnvironment.AppViewXPassword
+	appviewxClientId := configAppViewXEnvironment.AppViewXClientId
+	appviewxClientSecret := configAppViewXEnvironment.AppViewXClientSecret
+	appviewxEnvironmentIP := configAppViewXEnvironment.AppViewXEnvironmentIP
+	appviewxEnvironmentPort := configAppViewXEnvironment.AppViewXEnvironmentPort
+	appviewxEnvironmentIsHTTPS := configAppViewXEnvironment.AppViewXIsHTTPS
+	appviewxGwSource := "external" // Same as resource_revoke_certificate.go
+
+	var appviewxSessionID, accessToken string
+	var err error
+
+	// Authentication - same logic as resource_revoke_certificate.go
+	if appviewxUserName != "" && appviewxPassword != "" {
+		appviewxSessionID, err = GetSession(appviewxUserName, appviewxPassword, appviewxEnvironmentIP, appviewxEnvironmentPort, "WEB", appviewxEnvironmentIsHTTPS)
+		if err != nil {
+			return fmt.Errorf("authentication failed: %v", err)
+		}
+	} else if appviewxClientId != "" && appviewxClientSecret != "" {
+		accessToken, err = GetAccessToken(appviewxClientId, appviewxClientSecret, appviewxEnvironmentIP, appviewxEnvironmentPort, "WEB", appviewxEnvironmentIsHTTPS)
+		if err != nil {
+			return fmt.Errorf("authentication failed: %v", err)
+		}
+	} else {
+		return fmt.Errorf("no authentication credentials available")
+	}
+
+	// Get resource ID hook - same default as resource_revoke_certificate.go
+	resourceIdHook := "GET_CERTIFICATE_RESOURCE_ID_BY_SERIAL_ISSUER"
+
+	logger.Info("🔍 Looking up certificate with serial: %s and issuer: %s", serialNumber, issuerCommonName)
+
+	// Step 1: Call the execute-hook API to get resource ID - same as resource_revoke_certificate.go
+	resourceId, err := getResourceIdBySerialAndIssuer(appviewxEnvironmentIP, appviewxEnvironmentPort, appviewxEnvironmentIsHTTPS, appviewxSessionID, accessToken, serialNumber, issuerCommonName, resourceIdHook)
+	if err != nil {
+		logger.Error("❌ Error retrieving resource ID:")
+		logger.Error("   ", err)
+		logger.Error("----------------------------------------------------------------------")
+		return err
+	}
+
+	logger.Info("🔄 Found certificate with resource ID: %s", resourceId)
+
+	// Step 2: Revoke certificate using the resource ID - same logic as resource_revoke_certificate.go
+	logger.Info("📝 Revocation reason: %s", reason)
+
+	// Build revocation payload - same as resource_revoke_certificate.go
+	payload := map[string]interface{}{
+		"resourceId": resourceId,
+		"reason":     reason,
+	}
+
+	// Add comments - same as resource_revoke_certificate.go
+	if comments != "" {
+		payload["comments"] = comments
+		logger.Info("💬 Revocation comments: %s", comments)
+	}
+
+	// Set query parameters - same as resource_revoke_certificate.go
+	queryParams := map[string]string{
+		"gwsource": appviewxGwSource,
+	}
+
+	// Get URL for the revoke endpoint - same as resource_revoke_certificate.go
+	url := GetURL(appviewxEnvironmentIP, appviewxEnvironmentPort, "certificate/revoke", queryParams, appviewxEnvironmentIsHTTPS)
+	logger.Debug("🌐 Revoking certificate using URL: %s", url)
+
+	// Prepare the request - same as resource_revoke_certificate.go
+	requestBody, err := json.Marshal(payload)
+	if err != nil {
+		logger.Error("❌ Error in marshalling the payload:")
+		logger.Error("   ", err)
+		logger.Error("   Payload: %+v\n", payload)
+		logger.Error("----------------------------------------------------------------------\n")
+		return err
+	}
+
+	// Log the request for debugging - same as resource_revoke_certificate.go
+	payloadBytes, _ := json.MarshalIndent(payload, "", "  ")
+	logger.Debug("📝 Revocation payload:\n%s\n", string(payloadBytes))
+
+	// Create HTTP client - same as resource_revoke_certificate.go
+	client := &http.Client{Transport: HTTPTransport()}
+
+	// Create request - same as resource_revoke_certificate.go
+	req, err := http.NewRequest(http.MethodPut, url, bytes.NewBuffer(requestBody))
+	if err != nil {
+		logger.Error("❌ Error in creating new request:")
+		logger.Error("   ", err)
+		logger.Error("----------------------------------------------------------------------")
+		return err
+	}
+
+	// Set headers - same as resource_revoke_certificate.go
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	// Add authentication header - same as resource_revoke_certificate.go
+	if appviewxSessionID != "" {
+		logger.Debug("🔑 Using session ID for authentication")
+		req.Header.Set(constants.SESSION_ID, appviewxSessionID)
+	} else if accessToken != "" {
+		logger.Debug("🔑 Using access token for authentication")
+		req.Header.Set(constants.TOKEN, accessToken)
+	}
+
+	// Make the request - same as resource_revoke_certificate.go
+	logger.Info("📤 Sending revocation request...")
+	resp, err := client.Do(req)
+	if err != nil {
+		logger.Error("❌ Error in revoking certificate:")
+		logger.Error("   ", err)
+		logger.Error("----------------------------------------------------------------------")
+		return err
+	}
+	defer resp.Body.Close()
+
+	logger.Info("📊 Certificate revocation response status code: %s", resp.Status)
+
+	// Read response body - same as resource_revoke_certificate.go
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logger.Error("❌ Unable to read response body:")
+		logger.Error("   ", err)
+		logger.Error("----------------------------------------------------------------------")
+		return err
+	}
+
+	// Format and log JSON response for better readability - same as resource_revoke_certificate.go
+	var prettyJSON bytes.Buffer
+	if err := json.Indent(&prettyJSON, responseBody, "", "  "); err != nil {
+		logger.Info("📦 Revocation response body (raw):\n%s\n", string(responseBody))
+	} else {
+		logger.Info("📦 Revocation response body:\n%s\n", prettyJSON.String())
+	}
+
+	// Parse response - same logic as resource_revoke_certificate.go
+	var responseObj map[string]interface{}
+	var requestId string
+	if err := json.Unmarshal(responseBody, &responseObj); err == nil {
+		if response, ok := responseObj["response"].(map[string]interface{}); ok {
+			if message, ok := response["message"].(string); ok {
+				logger.Info("💬 Response message: %s", message)
+			}
+			if reqId, ok := response["requestId"].(string); ok && reqId != "" {
+				requestId = reqId
+				logger.Info("🔑 Found request ID: %s", requestId)
+			}
+		}
+	}
+
+	// Determine if revocation was successful based on status code and response - same as resource_revoke_certificate.go
+	revocationSuccess := resp.StatusCode >= 200 && resp.StatusCode < 300
+
+	// Check for error responses - same logic as resource_revoke_certificate.go
+	if !revocationSuccess {
+		logger.Error("❌ Revocation failed:")
+		logger.Error("   Status: %s", resp.Status)
+		logger.Error("   Response:", string(responseBody))
+		logger.Error("----------------------------------------------------------------------")
+		// We don't return an error here because we want to keep the resource info in state
+		// even if revocation failed - this allows users to see what went wrong
+		return fmt.Errorf("revocation failed with status %s", resp.Status)
+	} else {
+		logger.Info("✅ Certificate with resource ID %s successfully revoked", resourceId)
+	}
+
+	logger.Info("✅ Revocation process complete")
 	return nil
 }
 
