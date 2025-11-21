@@ -77,7 +77,7 @@ provider "appviewx" {
   appviewx_environment_is_https = true
 }
 
-resource "appviewx_certificate_push_akv" "create_and_push_certificate" {
+resource "appviewx_certificate_push_akv" "<Common Name and AKV name or any unique string can be given as a resource name>" {
   field_info = jsonencode({
     "certificate_group_name": "Group1",
     "azure_account_name": "AKV",
@@ -93,11 +93,11 @@ resource "appviewx_certificate_push_akv" "create_and_push_certificate" {
   })
   workflow_name = "Create Cert Workflow"
 
-  resource "appviewx_create_push_certificate_request_status" "create_and_push_certificate_status" {
-  request_id = appviewx_certificate_push_akv.create_and_push_certificate.workflow_id
+  resource "appviewx_create_push_certificate_request_status" "<Common Name and AKV name or any unique string can be given as a resource name>" {
+  request_id = appviewx_certificate_push_akv.<Common Name and AKV name or any unique string can be given as a resource name>.workflow_id
   retry_count = 20
   retry_interval = 20
-  depends_on = [appviewx_certificate_push_akv.create_and_push_certificate]
+  depends_on = [appviewx_certificate_push_akv.<Common Name and AKV name or any unique string can be given as a resource name>]
 }
 }
 ```
@@ -140,13 +140,62 @@ Final Response of this Request after pooling the Status of the Certificate Creat
 ```
 ## Destroy
 
-To destroy the Certificate details in the Terraform State file, use:
+### Resource Naming Convention
+
+**Resource Type (Non-Modifiable)**:
+```hcl
+resource "appviewx_certificate_push_akv" "webapp_example_com_production_akv" {
+```
+- `appviewx_certificate_push_akv` is the resource type and **cannot be modified**. The certificate creation process depends on this specific resource type name.
+
+**Resource Name (Modifiable)**:
+```hcl
+resource "appviewx_certificate_push_akv" "webapp_example_com_production_akv" {
+```
+- `webapp_example_com_production_akv` is the resource name and is **fully customizable**. You can define any unique name according to your preference. This name will be reflected in the Terraform state file.
+
+**Recommended Naming Convention**:
+We recommend creating a unique resource name by combining the certificate common name and the Azure Key Vault device name. For example:
+- Certificate Common Name: `webapp.example.com`
+- AKV Device Name: `production-akv`
+- Resource Name: `webapp_example_com_production_akv`
+
+This naming convention helps easily identify and manage specific certificates when performing destroy operations.
+
+### Destroying Resources
+
+When you destroy a resource using the commands below, the following operations are performed:
+1. Remove the resource from the Terraform state file
+2. Revoke the certificate
+3. Delete the certificate from Azure Key Vault (AKV)
+
+**Step 1: List Available Resources**
+
+Before destroying, list the resources in your state file:
 
 ```bash
-terraform destroy
+terraform state list
 ```
 
-- This is mainly to ensure that certificates (or any cryptographic material) are not stored in the Terraform state file.
-- This feature is crucial for maintaining the security and confidentiality of sensitive cryptographic materials.
+Expected output:
+```
+appviewx_certificate_push_akv.<your_resource_name>
+appviewx_create_push_certificate_request_status.<your_resource_name>
+```
+
+**Step 2: Destroy Specific Resources**
+
+To destroy a specific certificate and its associated status resource, use the targeted destroy command:
+
+```bash
+terraform destroy \
+  -target='appviewx_certificate_push_akv.<your_resource_name>' \
+  -target='appviewx_create_push_certificate_request_status.<your_resource_name>'
+```
+
+Replace `<your_resource_name>` with the actual resource name you defined in your Terraform configuration.
+
+**Note**: 
+- This targeted destroy ensures only the specified certificate resources are removed, revoked, and deleted.
 
 ---

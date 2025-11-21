@@ -10,9 +10,9 @@ import (
 )
 
 var (
-	version     = "1.0.8"
-	releaseDate = "Aug 29, 2025"
-	description = "Changes in Download Certificate and Key Resource"
+	version     = "1.0.9"
+	releaseDate = "Nov 21, 2025"
+	description = "Metadata and Terraform destroy updation"
 )
 
 func init() {
